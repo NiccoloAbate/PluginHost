@@ -85,6 +85,11 @@ public:
         return out;
     }
 
+    // void tick( SAMPLE * in, SAMPLE * out, int nChannels )
+    // {
+    //   // is this correct?
+    // }
+
     float setParam( t_CKFLOAT p )
     {
         m_param = p;
@@ -136,71 +141,73 @@ public:
                 std::cout << "PluginHost: " << i << ": " << descriptions[i]->descriptiveName << std::endl;
             }
 
-            if (descriptions.size() > 0)
-            {
-                std::cout << "PluginHost: Found " << descriptions.size() << " plugin descriptions. Loading the first one..." << std::endl;
-                
-                // TODO: Figure out block size
-                constexpr int blockSize = 512;
-
-                juce::String error;
-                // Create the plugin instance asynchronously
-                format->createPluginInstanceAsync(*descriptions[0], m_srate, blockSize,
-                    [this](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
-                    {
-                        if (instance)
-                        {
-                            m_plugin = std::move(instance);
-                            std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
-
-                            m_plugin->prepareToPlay(m_srate, blockSize);
-
-                            // juce::AudioProcessor::BusesLayout normalLayout;
-                            // normalLayout.inputBuses.add(juce::AudioChannelSet::mono());
-                            // normalLayout.outputBuses.add(juce::AudioChannelSet::mono());
-                            
-                            // if (m_plugin->checkBusesLayoutSupported(normalLayout))
-                            //     m_plugin->setBusesLayout(normalLayout);
-                            // else
-                            // {
-                            //     // the plugin doesn't like the normal layout - should accomodate the defaultLayout instead then?
-                            //     std::cout << "PluginHost: Default layout not supported. Using normal layout." << std::endl;
-                            // }
-
-                            showEditor();
-                        }
-                        else
-                        {
-                            std::cout << "PluginHost: Failed to load plugin: " << error << std::endl;
-                        }
-                    });
-            }
-            else
+            if (descriptions.size() == 0)
             {
                 std::cout << "PluginHost: No plugin descriptions found in file." << std::endl;
+                return;
             }
+
+            std::cout << "PluginHost: Found " << descriptions.size() << " plugin descriptions. Loading the first one..." << std::endl;
+            
+            // TODO: Figure out block size - just has to be 1?
+            constexpr int blockSize = 512;
+
+            const auto callback = [this](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+                {
+                    if (!instance)
+                    {
+                        std::cout << "PluginHost: Failed to load plugin: " << error << std::endl;
+                        return;
+                    }
+
+                    m_plugin = std::move(instance);
+                    std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
+
+                    m_plugin->prepareToPlay(m_srate, blockSize);
+
+                    // juce::AudioProcessor::BusesLayout normalLayout;
+                    // normalLayout.inputBuses.add(juce::AudioChannelSet::mono());
+                    // normalLayout.outputBuses.add(juce::AudioChannelSet::mono());
+                    
+                    // if (m_plugin->checkBusesLayoutSupported(normalLayout))
+                    //     m_plugin->setBusesLayout(normalLayout);
+                    // else
+                    // {
+                    //     // the plugin doesn't like the normal layout - should accomodate the defaultLayout instead then?
+                    //     std::cout << "PluginHost: Default layout not supported. Using normal layout." << std::endl;
+                    // }
+
+                    // probably don't want to do this immediately long term
+                    showEditor();
+                };
+
+            // Create the plugin instance asynchronously
+            format->createPluginInstanceAsync(*descriptions[0], m_srate, blockSize, callback);
         });
     }
 
     void showEditor()
     {
+        // if the editor already exists, just bring it to the front
         if (m_editor)
         {
             m_editor->toFront(true);
             return;
         }
         
-        if (m_plugin->hasEditor())
+        // make sure that the plugin has an editor
+        if (!m_plugin->hasEditor())
+            return;
+        
+        // create the editor
+        if (auto* editor = m_plugin->createEditorIfNeeded())
         {
-            if (auto* editor = m_plugin->createEditorIfNeeded())
-            {
-                auto* window = new PluginEditorWindow(editor);
-                window->addToDesktop();
-                window->toFront(true);
-                window->onClose = [this]() { m_editor.reset(); };
-                
-                m_editor.reset(window);
-            }
+            // wrap the editor in a window
+            auto* window = new PluginEditorWindow(editor);
+            window->addToDesktop();
+            window->toFront(true);
+            window->onClose = [this]() { m_editor.reset(); };
+            m_editor.reset(window);
         }
     }
 
@@ -229,7 +236,7 @@ private:
 t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
 {
     static bool juceInitialized = false;
-    if( !juceInitialized )
+    if(!juceInitialized)
     {
         // Initialize JUCE Message Manager
         juce::MessageManager::getInstance();
