@@ -51,8 +51,6 @@ public:
         juce::MessageManager::callAsync([]()
         {
             std::cout << "Message loop is spinning (callAsync)!\n";
-
-            // juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon, "PluginHost", "JUCE popup window!", "OK" );
         });
 
         m_param = 0.0;
@@ -63,12 +61,12 @@ public:
         // Delete the plugin instance on the message thread
         if (m_plugin)
         {
-            // Destroy the plugin asynchronously
-            // juce::MessageManager::callAsync([plugin = std::move(m_plugin)]() mutable
-            // {
-            //     plugin.reset();
-            //     std::cout << "PluginHost: Plugin destroyed on message thread." << std::endl;
-            // });
+            // Destroy the plugin on the main thread
+            juce::MessageManager::callAsync([plugin = std::move(m_plugin)]() mutable
+            {
+                plugin.reset();
+                std::cout << "PluginHost: Plugin destroyed on message thread." << std::endl;
+            });
         }
     }
 
@@ -98,10 +96,10 @@ public:
         return (outputs[0] + outputs[1]) * 0.5f;
     }
 
-    // void tick( SAMPLE * in, SAMPLE * out, int nChannels )
-    // {
-    //   // is this correct?
-    // }
+    void tick( SAMPLE * in, SAMPLE * out, int nChannels )
+    {
+        std::cout << "PluginHost: tick(SAMPLE*, SAMPLE*, int) not nChannels: " << nChannels << std::endl;
+    }
 
     float setParam( t_CKFLOAT p )
     {
