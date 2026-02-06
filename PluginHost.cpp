@@ -22,7 +22,7 @@ CK_DLL_MFUN(pluginhost_getParam);
 CK_DLL_MFUN(pluginhost_load);
 
 // tick function
-CK_DLL_TICK(pluginhost_tick);
+CK_DLL_TICKF(pluginhost_tick);
 
 // data offset for internal class
 t_CKINT pluginhost_data_offset = 0;
@@ -37,8 +37,8 @@ public:
 
     PluginHost( t_CKFLOAT fs ) 
     : m_renderBuffer(2, m_blockSize),
-      m_inputBuffer(2, 4096),
-      m_outputBuffer(2, 4096)
+      m_inputBuffer(2, maxBlockSize),
+      m_outputBuffer(2, maxBlockSize)
     {
         m_srate = fs;
 
@@ -61,44 +61,56 @@ public:
         // Delete the plugin instance on the message thread
         if (m_plugin)
         {
+
             // Destroy the plugin on the main thread
-            juce::MessageManager::callAsync([plugin = std::move(m_plugin)]() mutable
+            std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
+            juce::MessageManager::callAsync([plugin]()
             {
-                plugin.reset();
+                // sharedPlugin will go out of scope here and delete the object
                 std::cout << "PluginHost: Plugin destroyed on message thread." << std::endl;
             });
         }
     }
 
-    SAMPLE tick( SAMPLE in )
+    void tick( SAMPLE * in, SAMPLE * out, int nframes )
     {
-        float inputs[2] = { in, in };
-        m_inputBuffer.push(inputs, 2);
+        constexpr int numChannels = maxChannels;
 
-        // Check if we have enough samples to process a block
-        if (m_inputBuffer.getAvailableSamples() >= m_blockSize)
+        for(int f = 0; f < nframes; f++)
         {
-            if (m_inputBuffer.pop(m_renderBuffer))
+            float inputs[2];
+            for(int c = 0; c < numChannels; c++)
+                inputs[c] = in[f * numChannels + c];
+            m_inputBuffer.push(inputs, numChannels);
+
+            // check if we have enough samples to process a block
+            if (m_inputBuffer.getAvailableSamples() >= m_blockSize)
             {
-                if (m_plugin)
+                if (m_inputBuffer.pop(m_renderBuffer))
                 {
-                    m_midiBuffer.clear();
-                    m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
+                    if (m_plugin)
+                    {
+                        m_midiBuffer.clear();
+
+                        // check the number of channels that a plugin actually wants (some might require sidechain inputs)
+                        const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
+                        // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
+                        if (totalNumChannels > maxChannels)
+                            std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
+
+                        m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
+                    }
+                    
+                    m_outputBuffer.push(m_renderBuffer);
                 }
-                
-                m_outputBuffer.push(m_renderBuffer);
             }
+
+            float outputs[2] = { 0.0f, 0.0f };
+            m_outputBuffer.pop(outputs, numChannels);
+            
+            for(int c = 0; c < numChannels; c++)
+                out[f * numChannels + c] = outputs[c];
         }
-
-        float outputs[2] = { 0.0f, 0.0f };
-        m_outputBuffer.pop(outputs, 2);
-        
-        return (outputs[0] + outputs[1]) * 0.5f;
-    }
-
-    void tick( SAMPLE * in, SAMPLE * out, int nChannels )
-    {
-        std::cout << "PluginHost: tick(SAMPLE*, SAMPLE*, int) not nChannels: " << nChannels << std::endl;
     }
 
     float setParam( t_CKFLOAT p )
@@ -173,17 +185,17 @@ public:
 
                     m_plugin->prepareToPlay(m_srate, m_blockSize);
 
-                    // juce::AudioProcessor::BusesLayout normalLayout;
-                    // normalLayout.inputBuses.add(juce::AudioChannelSet::mono());
-                    // normalLayout.outputBuses.add(juce::AudioChannelSet::mono());
+                    // request normal stereo layout
+                    juce::AudioProcessor::BusesLayout normalLayout;
+                    normalLayout.inputBuses.add(juce::AudioChannelSet::stereo());
+                    normalLayout.outputBuses.add(juce::AudioChannelSet::stereo());
                     
-                    // if (m_plugin->checkBusesLayoutSupported(normalLayout))
-                    //     m_plugin->setBusesLayout(normalLayout);
-                    // else
-                    // {
-                    //     // the plugin doesn't like the normal layout - should accomodate the defaultLayout instead then?
-                    //     std::cout << "PluginHost: Default layout not supported. Using normal layout." << std::endl;
-                    // }
+                    if (m_plugin->checkBusesLayoutSupported(normalLayout))
+                        m_plugin->setBusesLayout(normalLayout);
+                    else
+                    {
+                        // the plugin doesn't like the normal layout it is going to force some other layout
+                    }
 
                     // probably don't want to do this immediately long term
                     showEditor();
@@ -224,6 +236,9 @@ public:
 
     }
 
+    // for now used fixed number of channels and lock it to stereo
+    static constexpr int maxChannels = 2;
+
 private:
 
     float m_param;
@@ -237,6 +252,7 @@ private:
     juce::MidiBuffer m_midiBuffer;
 
     static constexpr int m_blockSize = 16;
+    static constexpr int maxBlockSize = 128;
     CircularBuffer m_inputBuffer;
     CircularBuffer m_outputBuffer;
 };
@@ -285,7 +301,7 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_ctor(QUERY, pluginhost_ctor);
     QUERY->add_dtor(QUERY, pluginhost_dtor);
 
-    QUERY->add_ugen_func(QUERY, pluginhost_tick, NULL, 1, 1);
+    QUERY->add_ugen_funcf(QUERY, pluginhost_tick, NULL, PluginHost::maxChannels, PluginHost::maxChannels);
 
     QUERY->add_mfun(QUERY, pluginhost_setParam, "float", "param");
     QUERY->add_arg(QUERY, "float", "arg");
@@ -331,10 +347,10 @@ CK_DLL_DTOR(pluginhost_dtor)
 }
 
 
-CK_DLL_TICK(pluginhost_tick)
+CK_DLL_TICKF(pluginhost_tick)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
-    if( ph_obj ) *out = ph_obj->tick(in);
+    if( ph_obj ) ph_obj->tick(in, out, nframes);
     return TRUE;
 }
 
