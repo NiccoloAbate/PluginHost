@@ -31,6 +31,31 @@ CK_DLL_TICKF(pluginhost_tick);
 t_CKINT pluginhost_data_offset = 0;
 
 
+// probably shouldn't be used, but is convenient and maybe ok
+void callOnMessageThreadSync(std::function<void()> func)
+{
+    jassert(func);
+    
+    juce::WaitableEvent event;
+    juce::MessageManager::callAsync([func, &event]()
+    {
+        func();
+        event.signal();
+    });
+    event.wait();
+}
+
+void callOnMessageThread(std::function<void()> func)
+{
+    jassert(func);
+
+    if (juce::MessageManager::existsAndIsCurrentThread())
+        func();
+    else
+        juce::MessageManager::callAsync(func);
+}
+
+
 //-----------------------------------------------------------------------------
 // PluginHost class definition
 //-----------------------------------------------------------------------------
@@ -137,7 +162,7 @@ public:
         }
 
         // Dispatch loading to the message thread
-        juce::MessageManager::callAsync([this, file, context = createAsyncEventContext()]()
+        callOnMainThread([this, file, context = createAsyncEventContext()]()
         {            
             juce::AudioPluginFormat* format = nullptr;
             for (int i = 0; i < m_formatManager.getNumFormats(); ++i)
@@ -175,6 +200,8 @@ public:
 
             std::cout << "PluginHost: Found " << descriptions.size() << " plugin descriptions. Loading the first one..." << std::endl;
             
+            
+
             const auto callback = [this, context](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
                 {
                     if (!instance)
@@ -207,6 +234,10 @@ public:
             // Create the plugin instance asynchronously
             format->createPluginInstanceAsync(*descriptions[0], m_srate, m_blockSize, callback);
         });
+
+        // if we are forcing synchronicity, wait for the plugin to load
+        if (m_forceSynchronous)
+            waitForAsyncEvents();
     }
 
     void showEditor()
@@ -236,7 +267,7 @@ public:
 
     void saveState(const std::string& path)
     {
-        juce::MessageManager::callAsync([this, path, context = createAsyncEventContext()]()
+        callOnMainThread([this, path, context = createAsyncEventContext()]()
         {
             if (!m_plugin)
             {
@@ -257,7 +288,7 @@ public:
 
     void loadState(const std::string& path)
     {
-        juce::MessageManager::callAsync([this, path, context = createAsyncEventContext()]()
+        callOnMainThread([this, path, context = createAsyncEventContext()]()
         {
             if (!m_plugin)
             {
@@ -283,14 +314,15 @@ public:
         });
     }
 
-    bool asyncEventRunning()
+    bool asyncEventRunning() const
     {
         return m_asyncEventCount > 0;
     }
 
-    static void printPluginList()
+    void waitForAsyncEvents() const
     {
-
+        while (m_asyncEventCount > 0)
+            std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
 
     // for now used fixed number of channels and lock it to stereo
@@ -338,7 +370,22 @@ private:
     };
     std::shared_ptr<AsyncEventContext> createAsyncEventContext() { return std::make_shared<AsyncEventContext>(*this); }
 
+    void callOnMainThread(std::function<void()> func)
+    {
+        if (m_forceSynchronous)
+            callOnMessageThreadSync(func);
+        else
+            callOnMessageThread(func);
+    }
+
     std::atomic<int> m_asyncEventCount { 0 };
+
+    // if true all main thread events will be force to be "synchronous" (i.e. blocking audio process until they finish)
+    // this is simpler for user (since they don't have to manage waiting for asynchronous events) and nice for debugging
+    // but it is fundamentally bad audio programming practice - it may result in unnecessary audio dropouts,
+    // and depending on the way ChucK handles the main thread events, it may result in deadlocks
+    // seems to work in practice for now though
+    bool m_forceSynchronous = true;
 };
 
 
