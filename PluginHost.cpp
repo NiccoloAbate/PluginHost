@@ -10,6 +10,7 @@
 #include <math.h>
 
 #include "PluginEditorWindow.h"
+#include "CircularBuffer.h"
 
 // constructor/destructor
 CK_DLL_CTOR(pluginhost_ctor);
@@ -34,11 +35,13 @@ class PluginHost
 {
 public:
 
-    PluginHost( t_CKFLOAT fs )
+    PluginHost( t_CKFLOAT fs ) 
+    : m_renderBuffer(2, m_blockSize),
+      m_inputBuffer(2, 4096),
+      m_outputBuffer(2, 4096)
     {
         m_srate = fs;
 
-        m_renderBuffer.setSize(2, 1);
         m_renderBuffer.clear();
         
         // Register plugin formats
@@ -71,18 +74,28 @@ public:
 
     SAMPLE tick( SAMPLE in )
     {
-        // Use pre-allocated buffer
-        m_renderBuffer.getWritePointer(0)[0] = in;
-        m_renderBuffer.getWritePointer(1)[0] = in;
+        float inputs[2] = { in, in };
+        m_inputBuffer.push(inputs, 2);
 
-        if (m_plugin)
+        // Check if we have enough samples to process a block
+        if (m_inputBuffer.getAvailableSamples() >= m_blockSize)
         {
-            m_midiBuffer.clear();
-            m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
+            if (m_inputBuffer.pop(m_renderBuffer))
+            {
+                if (m_plugin)
+                {
+                    m_midiBuffer.clear();
+                    m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
+                }
+                
+                m_outputBuffer.push(m_renderBuffer);
+            }
         }
 
-        const float out = (m_renderBuffer.getReadPointer(0)[0] + m_renderBuffer.getReadPointer(1)[0]) / 2.0f;
-        return out;
+        float outputs[2] = { 0.0f, 0.0f };
+        m_outputBuffer.pop(outputs, 2);
+        
+        return (outputs[0] + outputs[1]) * 0.5f;
     }
 
     // void tick( SAMPLE * in, SAMPLE * out, int nChannels )
@@ -149,9 +162,6 @@ public:
 
             std::cout << "PluginHost: Found " << descriptions.size() << " plugin descriptions. Loading the first one..." << std::endl;
             
-            // TODO: Figure out block size - just has to be 1?
-            constexpr int blockSize = 512;
-
             const auto callback = [this](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
                 {
                     if (!instance)
@@ -163,7 +173,7 @@ public:
                     m_plugin = std::move(instance);
                     std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
 
-                    m_plugin->prepareToPlay(m_srate, blockSize);
+                    m_plugin->prepareToPlay(m_srate, m_blockSize);
 
                     // juce::AudioProcessor::BusesLayout normalLayout;
                     // normalLayout.inputBuses.add(juce::AudioChannelSet::mono());
@@ -182,7 +192,7 @@ public:
                 };
 
             // Create the plugin instance asynchronously
-            format->createPluginInstanceAsync(*descriptions[0], m_srate, blockSize, callback);
+            format->createPluginInstanceAsync(*descriptions[0], m_srate, m_blockSize, callback);
         });
     }
 
@@ -227,6 +237,10 @@ private:
     std::unique_ptr<PluginEditorWindow> m_editor;
     juce::AudioBuffer<float> m_renderBuffer;
     juce::MidiBuffer m_midiBuffer;
+
+    static constexpr int m_blockSize = 16;
+    CircularBuffer m_inputBuffer;
+    CircularBuffer m_outputBuffer;
 };
 
 
