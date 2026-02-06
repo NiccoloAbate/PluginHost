@@ -1,11 +1,17 @@
 @import "PluginHost";
 
-PluginHost host;
+PluginHost plugin;
 
-host.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
-//host.load("/Library/Audio/Plug-Ins/VST3/Graphiti.vst3");
+//plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
+plugin.load("/Library/Audio/Plug-Ins/VST3/Graphiti.vst3");
 
-host => dac;
+while (plugin.asyncEventRunning())
+    1::ms => now;
+
+//plugin.saveState("/Users/niccoloabate/Downloads/chuckGraphitiState");
+plugin.loadState("/Users/niccoloabate/Downloads/chuckGraphitiState");
+
+plugin => dac;
 
 // window title
 GG.windowTitle("ChucK/ChuGl/JUCE");

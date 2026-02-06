@@ -20,6 +20,9 @@ CK_DLL_DTOR(pluginhost_dtor);
 CK_DLL_MFUN(pluginhost_setParam);
 CK_DLL_MFUN(pluginhost_getParam);
 CK_DLL_MFUN(pluginhost_load);
+CK_DLL_MFUN(pluginhost_saveState);
+CK_DLL_MFUN(pluginhost_loadState);
+CK_DLL_MFUN(pluginhost_asyncEventRunning);
 
 // tick function
 CK_DLL_TICKF(pluginhost_tick);
@@ -48,7 +51,7 @@ public:
         m_formatManager.addDefaultFormats();
 
         // Verify the Message Loop is spinning
-        juce::MessageManager::callAsync([]()
+        juce::MessageManager::callAsync([context = createAsyncEventContext()]()
         {
             std::cout << "Message loop is spinning (callAsync)!\n";
         });
@@ -134,7 +137,7 @@ public:
         }
 
         // Dispatch loading to the message thread
-        juce::MessageManager::callAsync([this, file]()
+        juce::MessageManager::callAsync([this, file, context = createAsyncEventContext()]()
         {            
             juce::AudioPluginFormat* format = nullptr;
             for (int i = 0; i < m_formatManager.getNumFormats(); ++i)
@@ -172,7 +175,7 @@ public:
 
             std::cout << "PluginHost: Found " << descriptions.size() << " plugin descriptions. Loading the first one..." << std::endl;
             
-            const auto callback = [this](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+            const auto callback = [this, context](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
                 {
                     if (!instance)
                     {
@@ -231,6 +234,60 @@ public:
         }
     }
 
+    void saveState(const std::string& path)
+    {
+        juce::MessageManager::callAsync([this, path, context = createAsyncEventContext()]()
+        {
+            if (!m_plugin)
+            {
+                std::cout << "PluginHost: No plugin loaded." << std::endl;
+                return;
+            }
+
+            juce::MemoryBlock destData;
+            m_plugin->getStateInformation(destData);
+
+            juce::File file(path);
+            if (file.replaceWithData(destData.getData(), destData.getSize()))
+                std::cout << "PluginHost: State saved to " << path << std::endl;
+            else
+                std::cout << "PluginHost: Failed to save state to " << path << std::endl;
+        });
+    }
+
+    void loadState(const std::string& path)
+    {
+        juce::MessageManager::callAsync([this, path, context = createAsyncEventContext()]()
+        {
+            if (!m_plugin)
+            {
+                std::cout << "PluginHost: No plugin loaded." << std::endl;
+                return;
+            }
+
+            juce::File file(path);
+            if (!file.existsAsFile())
+            {
+                std::cout << "PluginHost: File does not exist: " << path << std::endl;
+                return;
+            }
+
+            juce::MemoryBlock destData;
+            if (file.loadFileAsData(destData))
+            {
+                m_plugin->setStateInformation(destData.getData(), (int)destData.getSize());
+                std::cout << "PluginHost: State loaded from " << path << std::endl;
+            }
+            else
+                std::cout << "PluginHost: Failed to load state from " << path << std::endl;
+        });
+    }
+
+    bool asyncEventRunning()
+    {
+        return m_asyncEventCount > 0;
+    }
+
     static void printPluginList()
     {
 
@@ -255,6 +312,33 @@ private:
     static constexpr int maxBlockSize = 128;
     CircularBuffer m_inputBuffer;
     CircularBuffer m_outputBuffer;
+
+    struct AsyncEventContext
+    {
+        AsyncEventContext(PluginHost& host) : m_host(&host) { m_host->m_asyncEventCount.fetch_add(1); }
+        ~AsyncEventContext() { if (m_host) m_host->m_asyncEventCount.fetch_sub(1); }
+
+        AsyncEventContext(const AsyncEventContext&) = delete;
+        AsyncEventContext& operator=(const AsyncEventContext&) = delete;
+        AsyncEventContext(AsyncEventContext&& other) = delete;
+        // {
+        //     m_host = other.m_host;
+        //     other.m_host = nullptr;
+        // }
+        AsyncEventContext& operator=(AsyncEventContext&& other) = delete;
+        // {
+        //     if (this == &other) return *this;
+        //     if (m_host) m_host->m_asyncEventCount.fetch_sub(1);
+        //     m_host = other.m_host;
+        //     other.m_host = nullptr;
+        //     return *this;
+        // }
+
+        PluginHost* m_host = nullptr;
+    };
+    std::shared_ptr<AsyncEventContext> createAsyncEventContext() { return std::make_shared<AsyncEventContext>(*this); }
+
+    std::atomic<int> m_asyncEventCount { 0 };
 };
 
 
@@ -313,6 +397,17 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_load, "void", "load");
     QUERY->add_arg(QUERY, "string", "path");
     QUERY->doc_func(QUERY, "Load a plugin from a file path.");
+
+    QUERY->add_mfun(QUERY, pluginhost_saveState, "void", "saveState");
+    QUERY->add_arg(QUERY, "string", "path");
+    QUERY->doc_func(QUERY, "Save plugin state to a file.");
+
+    QUERY->add_mfun(QUERY, pluginhost_loadState, "void", "loadState");
+    QUERY->add_arg(QUERY, "string", "path");
+    QUERY->doc_func(QUERY, "Load plugin state from a file.");
+
+    QUERY->add_mfun(QUERY, pluginhost_asyncEventRunning, "int", "asyncEventRunning");
+    QUERY->doc_func(QUERY, "Check if an async event is running.");
 
     // reserve a variable for internal class pointer
     pluginhost_data_offset = QUERY->add_mvar(QUERY, "int", "@ph_data", false);
@@ -373,4 +468,24 @@ CK_DLL_MFUN(pluginhost_load)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     std::string path = GET_NEXT_STRING_SAFE(ARGS);
     ph_obj->loadPlugin(path);
+}
+
+CK_DLL_MFUN(pluginhost_saveState)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    std::string path = GET_NEXT_STRING_SAFE(ARGS);
+    ph_obj->saveState(path);
+}
+
+CK_DLL_MFUN(pluginhost_loadState)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    std::string path = GET_NEXT_STRING_SAFE(ARGS);
+    ph_obj->loadState(path);
+}
+
+CK_DLL_MFUN(pluginhost_asyncEventRunning)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->asyncEventRunning();
 }
