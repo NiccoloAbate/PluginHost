@@ -11,6 +11,19 @@ public:
         buffer.clear();
     }
 
+    void setSize(int numChannels, int size)
+    {
+        buffer.setSize(numChannels, size);
+        clear();
+    }
+
+    void clear()
+    {
+        buffer.clear();
+        writeIndex = 0;
+        readIndex = 0;
+    }
+
     void push(float* input, int numChannels)
     {
         for (int ch = 0; ch < numChannels && ch < buffer.getNumChannels(); ++ch)

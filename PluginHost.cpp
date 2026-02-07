@@ -26,6 +26,8 @@ CK_DLL_MFUN(pluginhost_asyncEventRunning);
 CK_DLL_MFUN(pluginhost_waitForAsyncEvents);
 CK_DLL_MFUN(pluginhost_setForceSynchronous);
 CK_DLL_MFUN(pluginhost_getForceSynchronous);
+CK_DLL_MFUN(pluginhost_setBlockSize);
+CK_DLL_MFUN(pluginhost_getBlockSize);
 
 // PlayHead functions
 CK_DLL_MFUN(pluginhost_bpm);
@@ -121,12 +123,15 @@ class PluginHost
 public:
 
     PluginHost( t_CKFLOAT fs ) 
-    : m_renderBuffer(2, m_blockSize),
-      m_inputBuffer(2, maxBlockSize),
-      m_outputBuffer(2, maxBlockSize)
+    : m_renderBuffer(2, 16),
+      m_inputBuffer(2, maxBufferSize * 2),
+      m_outputBuffer(2, maxBufferSize * 2)
     {
         m_srate = fs;
-
+        // default block size
+        m_blockSize = 16;
+        // resize render buffer to match default block size
+        m_renderBuffer.setSize(2, m_blockSize);
         m_renderBuffer.clear();
         
         // Register plugin formats
@@ -163,9 +168,51 @@ public:
     {
         constexpr int numChannels = maxChannels;
 
+        // fine when there is no contention
+        juce::SpinLock::ScopedLockType lock(m_audioLock);
+
+        if (nframes == m_blockSize)
+        {
+            if (m_plugin)
+            {
+                // De-interleave input to m_renderBuffer
+                for(int c = 0; c < numChannels; c++)
+                {
+                    float* dest = m_renderBuffer.getWritePointer(c);
+                    for(int f = 0; f < nframes; f++)
+                        dest[f] = in[f * numChannels + c];
+                }
+
+                m_midiBuffer.clear();
+
+                // check the number of channels that a plugin actually wants (some might require sidechain inputs)
+                const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
+                // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
+                if (totalNumChannels > maxChannels)
+                    std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
+
+                m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
+
+                // Interleave output from m_renderBuffer
+                for(int c = 0; c < numChannels; c++)
+                {
+                    const float* src = m_renderBuffer.getReadPointer(c);
+                    for(int f = 0; f < nframes; f++)
+                        out[f * numChannels + c] = src[f];
+                }
+            }
+            else
+            {
+                // passthrough
+                for(int i = 0; i < nframes * numChannels; i++)
+                    out[i] = in[i];
+            }
+            return;
+        }
+
         for(int f = 0; f < nframes; f++)
         {
-            float inputs[2];
+            float inputs[numChannels];
             for(int c = 0; c < numChannels; c++)
                 inputs[c] = in[f * numChannels + c];
             m_inputBuffer.push(inputs, numChannels);
@@ -192,7 +239,7 @@ public:
                 }
             }
 
-            float outputs[2] = { 0.0f, 0.0f };
+            float outputs[numChannels];
             m_outputBuffer.pop(outputs, numChannels);
             
             for(int c = 0; c < numChannels; c++)
@@ -221,7 +268,7 @@ public:
         }
 
         // Dispatch loading to the message thread
-        callOnMainThread([this, file, context = createAsyncEventContext()]
+        callOnMainThread([this, file, context = createAsyncEventContext()]()
         {
             juce::AudioPluginFormat* format = nullptr;
             for (int i = 0; i < m_formatManager.getNumFormats(); ++i)
@@ -399,7 +446,7 @@ public:
     {
         if (size <= 0) return;
 
-        callOnMainThread([this, size, context = createAsyncEventContext()]
+        callOnMainThread([this, size, context = createAsyncEventContext()]()
         {
             juce::SpinLock::ScopedLockType lock(m_audioLock);
             m_blockSize = size;
@@ -440,8 +487,11 @@ private:
     juce::AudioBuffer<float> m_renderBuffer;
     juce::MidiBuffer m_midiBuffer;
 
-    static constexpr int m_blockSize = 16;
-    static constexpr int maxBlockSize = 128;
+    // brute force synchronization - use sparingly
+    juce::SpinLock m_audioLock;
+
+    int m_blockSize = 16;
+    static constexpr int maxBufferSize = 256;
     CircularBuffer m_inputBuffer;
     CircularBuffer m_outputBuffer;
 
@@ -546,11 +596,11 @@ CK_DLL_QUERY( PluginHost )
     QUERY->doc_func(QUERY, "Check if an async event is running.");
 
     QUERY->add_mfun(QUERY, pluginhost_waitForAsyncEvents, "void", "waitForAsyncEvents");
-    QUERY->doc_func(QUERY, "Wait for all async events to finish. WARNING: This is not realtime safe and should only be used for debugging or in non-realtime contexts.");
+    QUERY->doc_func(QUERY, "Wait for all async events to finish. WARNING: This is not realtime safe and should only be used in non-realtime contexts (such as setup) or for debugging.");
 
     QUERY->add_mfun(QUERY, pluginhost_setForceSynchronous, "int", "forceSynchronous");
     QUERY->add_arg(QUERY, "int", "b");
-    QUERY->doc_func(QUERY, "Set whether to force synchronous execution of main thread events. If true, audio processing may block.");
+    QUERY->doc_func(QUERY, "Set whether to force synchronous execution of main thread events. If true, there is no need to wait on asynchronous events, but audio processing may block.");
 
     QUERY->add_mfun(QUERY, pluginhost_getForceSynchronous, "int", "forceSynchronous");
     QUERY->doc_func(QUERY, "Get whether synchronous execution of main thread events is forced.");
@@ -702,7 +752,6 @@ CK_DLL_MFUN(pluginhost_getBlockSize)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     RETURN->v_int = ph_obj->getBlockSize();
 }
-
 CK_DLL_MFUN(pluginhost_bpm)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
