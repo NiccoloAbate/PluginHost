@@ -16,7 +16,7 @@
 CK_DLL_CTOR(pluginhost_ctor);
 CK_DLL_DTOR(pluginhost_dtor);
 
-// example functions
+// parameter functions
 CK_DLL_MFUN(pluginhost_setParam);
 CK_DLL_MFUN(pluginhost_getParam);
 CK_DLL_MFUN(pluginhost_getParamName);
@@ -25,6 +25,8 @@ CK_DLL_MFUN(pluginhost_getParamDisplay);
 CK_DLL_MFUN(pluginhost_numParams);
 CK_DLL_MFUN(pluginhost_numNonMidiParams);
 CK_DLL_MFUN(pluginhost_findParam);
+
+// other functions
 CK_DLL_MFUN(pluginhost_load);
 CK_DLL_MFUN(pluginhost_saveState);
 CK_DLL_MFUN(pluginhost_loadState);
@@ -37,7 +39,7 @@ CK_DLL_MFUN(pluginhost_getForceSynchronous);
 CK_DLL_MFUN(pluginhost_setBlockSize);
 CK_DLL_MFUN(pluginhost_getBlockSize);
 
-// PlayHead functions
+// playhead functions
 CK_DLL_MFUN(pluginhost_bpm);
 CK_DLL_MFUN(pluginhost_getBpm);
 CK_DLL_MFUN(pluginhost_timeSig);
@@ -53,7 +55,7 @@ CK_DLL_TICKF(pluginhost_tick);
 t_CKINT pluginhost_data_offset = 0;
 
 
-// bad practice, but is convenient and maybe ok
+// bad practice, but is convenient and can be ok
 void callOnMessageThreadSync(std::function<void()> func)
 {
     jassert(func);
@@ -149,10 +151,10 @@ public:
         m_renderBuffer.setSize(2, m_blockSize);
         m_renderBuffer.clear();
         
-        // Register plugin formats
+        // register plugin formats
         m_formatManager.addDefaultFormats();
 
-        // Verify the Message Loop is spinning
+        // verify the Message Loop is spinning
         juce::MessageManager::callAsync([context = createAsyncEventContext()]
         {
             std::cout << "Message loop is spinning (callAsync)!\n";
@@ -161,19 +163,19 @@ public:
     
     ~PluginHost()
     {
-        // Delete the plugin instance on the message thread
+        // wait for any pending async events just in case
+        waitForAsyncEvents(100);
+
+        // delete the plugin instance on the message thread
         if (m_plugin)
         {
-            // Safety: detach playhead before destruction as m_playHead will be destroyed with this PluginHost
+            // detach playhead before destruction as m_playHead will be destroyed
+            // should maybe extend the lifetime of the playhead instead
             m_plugin->setPlayHead(nullptr);
 
-            // Destroy the plugin on the main thread
+            // destroy the plugin on the main thread
             std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
-            juce::MessageManager::callAsync([plugin]()
-            {
-                // sharedPlugin will go out of scope here and delete the object
-                std::cout << "PluginHost: Plugin destroyed on message thread." << std::endl;
-            });
+            juce::MessageManager::callAsync([plugin]() {});
         }
     }
 
@@ -188,7 +190,7 @@ public:
         {
             if (m_plugin)
             {
-                // De-interleave input to m_renderBuffer
+                // de-interleave input to m_renderBuffer
                 for(int c = 0; c < numChannels; c++)
                 {
                     float* dest = m_renderBuffer.getWritePointer(c);
@@ -206,7 +208,7 @@ public:
 
                 m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
 
-                // Interleave output from m_renderBuffer
+                // interleave output from m_renderBuffer
                 for(int c = 0; c < numChannels; c++)
                 {
                     const float* src = m_renderBuffer.getReadPointer(c);
@@ -341,7 +343,6 @@ public:
             return;
         }
 
-        // Dispatch loading to the message thread
         callOnMainThread([this, file, context = createAsyncEventContext()]
         {
             juce::AudioPluginFormat* format = nullptr;
@@ -363,15 +364,9 @@ public:
             }
 
             juce::OwnedArray<juce::PluginDescription> descriptions;
-            // Use KnownPluginList to scan and add the file
+            // use KnownPluginList to scan and add the file
             m_knownPluginList.scanAndAddFile(file.getFullPathName(), false, descriptions, *format);
             
-            // print descriptions
-            for (int i = 0; i < descriptions.size(); ++i)
-            {
-                std::cout << "PluginHost: " << i << ": " << descriptions[i]->descriptiveName << std::endl;
-            }
-
             if (descriptions.size() == 0)
             {
                 std::cout << "PluginHost: No plugin descriptions found in file." << std::endl;
@@ -419,7 +414,7 @@ public:
                     showEditor();
             };
 
-            // Create the plugin instance asynchronously
+            // create the plugin instance asynchronously
             format->createPluginInstanceAsync(*descriptions[0], m_srate, m_blockSize, callback);
         });
 
@@ -515,10 +510,22 @@ public:
         return m_asyncEventCount > 0;
     }
 
-    void waitForAsyncEvents() const
+    void waitForAsyncEvents(int timeoutMs = -1) const
     {
+        const auto start = std::chrono::steady_clock::now();
         while (m_asyncEventCount > 0)
+        {
+            if (timeoutMs >= 0)
+            {
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+                if (elapsed > timeoutMs)
+                {
+                    std::cout << "PluginHost: waitForAsyncEvents timed out." << std::endl;
+                    break;
+                }
+            }
             std::this_thread::sleep_for(std::chrono::microseconds(1));
+        }
     }
 
     void setForceSynchronous(bool b)
@@ -551,7 +558,7 @@ public:
         return m_blockSize;
     }
 
-    // PlayHead accessors
+    // playHead accessors
     float setBpm(float b) { m_playHead.setBpm(b); return b; }
     float getBpm() { return m_playHead.getBpm(); }
     void setTimeSig(int n, int d) { m_playHead.setTimeSignature(n, d); }
@@ -564,8 +571,6 @@ public:
     static constexpr int maxChannels = 2;
 
 private:
-
-    double m_srate;
     
     // plugin format manager
     juce::AudioPluginFormatManager m_formatManager;
@@ -585,6 +590,7 @@ private:
     // brute force synchronization - use sparingly
     juce::SpinLock m_audioLock;
 
+    double m_srate;
     int m_blockSize = 16;
     static constexpr int maxBufferSize = 256;
     CircularBuffer m_inputBuffer;
@@ -635,13 +641,13 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
     static bool juceInitialized = false;
     if(!juceInitialized)
     {
-        // Initialize JUCE Message Manager
+        // initialize JUCE Message Manager
         juce::MessageManager::getInstance();
         juceInitialized = true;
         printf("JUCE MessageManager initialized on main thread.\n");
     }
 
-    // Pump the message loop briefly to process events
+    // pump the message loop briefly to process events
     constexpr int ms = 1; // should really be 0, but it doesn't seem to work if it's 0...
     juce::MessageManager::getInstance()->runDispatchLoopUntil(1); 
 
@@ -650,7 +656,7 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
 
 t_CKBOOL CK_DLL_CALL pluginhost_main_quit( void * bindle )
 {
-    // Clean up JUCE Message Manager
+    // clean up JUCE Message Manager
     juce::MessageManager::deleteInstance();
     printf("JUCE MessageManager deleted.\n");
     return TRUE;
