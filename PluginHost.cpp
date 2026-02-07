@@ -366,18 +366,7 @@ private:
         AsyncEventContext(const AsyncEventContext&) = delete;
         AsyncEventContext& operator=(const AsyncEventContext&) = delete;
         AsyncEventContext(AsyncEventContext&& other) = delete;
-        // {
-        //     m_host = other.m_host;
-        //     other.m_host = nullptr;
-        // }
         AsyncEventContext& operator=(AsyncEventContext&& other) = delete;
-        // {
-        //     if (this == &other) return *this;
-        //     if (m_host) m_host->m_asyncEventCount.fetch_sub(1);
-        //     m_host = other.m_host;
-        //     other.m_host = nullptr;
-        //     return *this;
-        // }
 
         PluginHost* m_host = nullptr;
     };
