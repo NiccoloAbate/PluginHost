@@ -2,17 +2,28 @@
 
 PluginHost plugin;
 
+// tell the plugin to run in synchronous mode
 plugin.forceSynchronous(true);
 
+// load the plugin
 plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
 //plugin.load("/Library/Audio/Plug-Ins/VST3/Graphiti.vst3");
 
+// show the editor
+plugin.showEditor();
+
+// wait for events
 // while (plugin.asyncEventRunning())
     // 1::ms => now;
 // plugin.waitForAsyncEvent();
 
+// save state
 //plugin.saveState("/Users/niccoloabate/Downloads/chuckGraphitiState");
 plugin.loadState("/Users/niccoloabate/Downloads/chuckGraphitiState");
+
+// print parameter names
+for(0 => int i; i < plugin.numNonMidiParams(); i++)
+    <<< i, ": ", plugin.paramName(i), "(" + plugin.paramLabel(i) + ")" >>>;
 
 plugin => dac;
 

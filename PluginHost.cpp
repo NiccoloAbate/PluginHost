@@ -5,7 +5,7 @@
 #include "chugin.h"
 #include "JuceHeader.h"
 
-#include <stdio.h>
+#include <stdio.h> 
 #include <limits.h>
 #include <math.h>
 
@@ -19,9 +19,17 @@ CK_DLL_DTOR(pluginhost_dtor);
 // example functions
 CK_DLL_MFUN(pluginhost_setParam);
 CK_DLL_MFUN(pluginhost_getParam);
+CK_DLL_MFUN(pluginhost_getParamName);
+CK_DLL_MFUN(pluginhost_getParamLabel);
+CK_DLL_MFUN(pluginhost_getParamDisplay);
+CK_DLL_MFUN(pluginhost_numParams);
+CK_DLL_MFUN(pluginhost_numNonMidiParams);
+CK_DLL_MFUN(pluginhost_findParam);
 CK_DLL_MFUN(pluginhost_load);
 CK_DLL_MFUN(pluginhost_saveState);
 CK_DLL_MFUN(pluginhost_loadState);
+CK_DLL_MFUN(pluginhost_showEditor);
+CK_DLL_MFUN(pluginhost_hideEditor);
 CK_DLL_MFUN(pluginhost_asyncEventRunning);
 CK_DLL_MFUN(pluginhost_waitForAsyncEvents);
 CK_DLL_MFUN(pluginhost_setForceSynchronous);
@@ -45,11 +53,17 @@ CK_DLL_TICKF(pluginhost_tick);
 t_CKINT pluginhost_data_offset = 0;
 
 
-// probably shouldn't be used, but is convenient and maybe ok
+// bad practice, but is convenient and maybe ok
 void callOnMessageThreadSync(std::function<void()> func)
 {
     jassert(func);
     
+    if (juce::MessageManager::existsAndIsCurrentThread())
+    {
+        func();
+        return;
+    }
+
     juce::WaitableEvent event;
     juce::MessageManager::callAsync([func, &event]()
     {
@@ -96,7 +110,7 @@ public:
 
     void setBpm(double b) { bpm.store(b, std::memory_order_relaxed); }
     void setTimeSignature(int n, int d)
-    { 
+    {
         numerator.store(n, std::memory_order_relaxed); 
         denominator.store(d, std::memory_order_relaxed); 
     }
@@ -122,8 +136,9 @@ class PluginHost
 {
 public:
 
-    PluginHost( t_CKFLOAT fs ) 
-    : m_renderBuffer(2, 16),
+    PluginHost( t_CKFLOAT fs )
+    :
+      m_renderBuffer(2, 16),
       m_inputBuffer(2, maxBufferSize * 2),
       m_outputBuffer(2, maxBufferSize * 2)
     {
@@ -142,8 +157,6 @@ public:
         {
             std::cout << "Message loop is spinning (callAsync)!\n";
         });
-
-        m_param = 0.0;
     }
     
     ~PluginHost()
@@ -247,15 +260,76 @@ public:
         }
     }
 
-    float setParam( t_CKFLOAT p )
+    int getNumParams()
     {
-        m_param = p;
-        return p;
+        if (!m_plugin) return 0;
+        return m_plugin->getParameters().size();
     }
 
-    float getParam()
+    int getNumNonMidiParams()
     {
-        return m_param;
+        if (!m_plugin) return 0;
+        int count = 0;
+        auto& params = m_plugin->getParameters();
+        for (auto* p : params)
+        {
+            if (!p->getName(128).startsWith("MIDI CC"))
+                count++;
+        }
+        return count;
+    }
+
+    std::string getParamName(int index)
+    {
+        if (!m_plugin) return "";
+        auto& params = m_plugin->getParameters();
+        if (index < 0 || index >= params.size()) return "";
+        return params[index]->getName(128).toStdString();
+    }
+
+    float getParam(int index)
+    {
+        if (!m_plugin) return 0.0f;
+        auto& params = m_plugin->getParameters();
+        if (index < 0 || index >= params.size()) return 0.0f;
+        return params[index]->getValue();
+    }
+
+    float setParam(int index, float val)
+    {
+        if (!m_plugin) return val;
+        auto& params = m_plugin->getParameters();
+        if (index < 0 || index >= params.size()) return val;
+        params[index]->setValue(val);
+        return val;
+    }
+
+    int findParam(const std::string& name)
+    {
+        if (!m_plugin) return -1;
+        auto& params = m_plugin->getParameters();
+        for (int i = 0; i < params.size(); ++i)
+        {
+            if (params[i]->getName(128).toStdString() == name)
+                return i;
+        }
+        return -1;
+    }
+
+    std::string getParamLabel(int index)
+    {
+        if (!m_plugin) return "";
+        auto& params = m_plugin->getParameters();
+        if (index < 0 || index >= params.size()) return "";
+        return params[index]->getLabel().toStdString();
+    }
+
+    std::string getParamDisplay(int index)
+    {
+        if (!m_plugin) return "";
+        auto& params = m_plugin->getParameters();
+        if (index < 0 || index >= params.size()) return "";
+        return params[index]->getCurrentValueAsText().toStdString();
     }
     
     void loadPlugin(const std::string& path)
@@ -268,7 +342,7 @@ public:
         }
 
         // Dispatch loading to the message thread
-        callOnMainThread([this, file, context = createAsyncEventContext()]()
+        callOnMainThread([this, file, context = createAsyncEventContext()]
         {
             juce::AudioPluginFormat* format = nullptr;
             for (int i = 0; i < m_formatManager.getNumFormats(); ++i)
@@ -306,37 +380,44 @@ public:
 
             std::cout << "PluginHost: Found " << descriptions.size() << " plugin descriptions. Loading the first one..." << std::endl;
             
-            
+            // destroy existing plugin asynchronously
+            {
+                std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
+                juce::MessageManager::callAsync([plugin]() {});
+            }
 
             const auto callback = [this, context](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
+            {
+                if (!instance)
                 {
-                    if (!instance)
-                    {
-                        std::cout << "PluginHost: Failed to load plugin: " << error << std::endl;
-                        return;
-                    }
+                    std::cout << "PluginHost: Failed to load plugin: " << error << std::endl;
+                    return;
+                }
 
-                    m_plugin = std::move(instance);
-                    std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
-
-                    m_plugin->prepareToPlay(m_srate, m_blockSize);
-                    m_plugin->setPlayHead(&m_playHead);
+                {
+                    instance->prepareToPlay(m_srate, m_blockSize);
+                    instance->setPlayHead(&m_playHead);
 
                     // request normal stereo layout
                     juce::AudioProcessor::BusesLayout normalLayout;
                     normalLayout.inputBuses.add(juce::AudioChannelSet::stereo());
                     normalLayout.outputBuses.add(juce::AudioChannelSet::stereo());
                     
-                    if (m_plugin->checkBusesLayoutSupported(normalLayout))
-                        m_plugin->setBusesLayout(normalLayout);
+                    if (instance->checkBusesLayoutSupported(normalLayout))
+                        instance->setBusesLayout(normalLayout);
                     else
                     {
                         // the plugin doesn't like the normal layout it is going to force some other layout
                     }
 
-                    // probably don't want to do this immediately long term
+                    m_plugin = std::move(instance);
+                }
+                std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
+
+                constexpr bool displayEditor = false;
+                if (displayEditor)
                     showEditor();
-                };
+            };
 
             // Create the plugin instance asynchronously
             format->createPluginInstanceAsync(*descriptions[0], m_srate, m_blockSize, callback);
@@ -349,27 +430,35 @@ public:
 
     void showEditor()
     {
-        // if the editor already exists, just bring it to the front
-        if (m_editor)
+        callOnMainThread([this, context = createAsyncEventContext()]
         {
-            m_editor->toFront(true);
-            return;
-        }
-        
-        // make sure that the plugin has an editor
-        if (!m_plugin->hasEditor())
-            return;
-        
-        // create the editor
-        if (auto* editor = m_plugin->createEditorIfNeeded())
-        {
-            // wrap the editor in a window
-            auto* window = new PluginEditorWindow(editor);
-            window->addToDesktop();
-            window->toFront(true);
-            window->onClose = [this]() { m_editor.reset(); };
-            m_editor.reset(window);
-        }
+            // if the editor already exists, just bring it to the front
+            if (m_editor)
+            {
+                m_editor->toFront(true);
+                return;
+            }
+            
+            // make sure that the plugin has an editor
+            if (!m_plugin->hasEditor())
+                return;
+            
+            // create the editor
+            if (auto* editor = m_plugin->createEditorIfNeeded())
+            {
+                // wrap the editor in a window
+                auto* window = new PluginEditorWindow(editor);
+                window->addToDesktop();
+                window->toFront(true);
+                window->onClose = [this]() { m_editor.reset(); };
+                m_editor.reset(window);
+            }
+        });
+    }
+
+    void hideEditor()
+    {
+        callOnMainThread([this, context = createAsyncEventContext()] { m_editor.reset(); });
     }
 
     void saveState(const std::string& path)
@@ -446,7 +535,7 @@ public:
     {
         if (size <= 0) return;
 
-        callOnMainThread([this, size, context = createAsyncEventContext()]()
+        callOnMainThread([this, size, context = createAsyncEventContext()]
         {
             juce::SpinLock::ScopedLockType lock(m_audioLock);
             m_blockSize = size;
@@ -476,15 +565,21 @@ public:
 
 private:
 
-    float m_param;
     double m_srate;
     
+    // plugin format manager
     juce::AudioPluginFormatManager m_formatManager;
+    // plugin list
     juce::KnownPluginList m_knownPluginList;
+    // playhead
     PlayHead m_playHead;
+    // plugin instance
     std::unique_ptr<juce::AudioPluginInstance> m_plugin;
+    // plugin editor window
     std::unique_ptr<PluginEditorWindow> m_editor;
+    // audio render buffer
     juce::AudioBuffer<float> m_renderBuffer;
+    // MIDI buffer
     juce::MidiBuffer m_midiBuffer;
 
     // brute force synchronization - use sparingly
@@ -495,6 +590,7 @@ private:
     CircularBuffer m_inputBuffer;
     CircularBuffer m_outputBuffer;
 
+    // context for tracking async events
     struct AsyncEventContext
     {
         AsyncEventContext(PluginHost& host) : m_host(&host) { m_host->m_asyncEventCount.fetch_add(1); }
@@ -507,8 +603,10 @@ private:
 
         PluginHost* m_host = nullptr;
     };
+    // create an async event context
     std::shared_ptr<AsyncEventContext> createAsyncEventContext() { return std::make_shared<AsyncEventContext>(*this); }
 
+    // call a function on the main thread, either synchonously or asynchronously
     void callOnMainThread(std::function<void()> func)
     {
         if (m_forceSynchronous)
@@ -517,6 +615,7 @@ private:
             callOnMessageThread(func);
     }
 
+    // number of currently running asynchronous events
     std::atomic<int> m_asyncEventCount { 0 };
 
     // if true all main thread events will be force to be "synchronous" (i.e. blocking audio process until they finish)
@@ -574,11 +673,35 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_ugen_funcf(QUERY, pluginhost_tick, NULL, PluginHost::maxChannels, PluginHost::maxChannels);
 
     QUERY->add_mfun(QUERY, pluginhost_setParam, "float", "param");
-    QUERY->add_arg(QUERY, "float", "arg");
-    QUERY->doc_func(QUERY, "Example parameter setter.");
+    QUERY->add_arg(QUERY, "int", "index");
+    QUERY->add_arg(QUERY, "float", "value");
+    QUERY->doc_func(QUERY, "Set parameter value.");
 
     QUERY->add_mfun(QUERY, pluginhost_getParam, "float", "param");
-    QUERY->doc_func(QUERY, "Example parameter getter.");
+    QUERY->add_arg(QUERY, "int", "index");
+    QUERY->doc_func(QUERY, "Get parameter value.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getParamName, "string", "paramName");
+    QUERY->add_arg(QUERY, "int", "index");
+    QUERY->doc_func(QUERY, "Get parameter name.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getParamLabel, "string", "paramLabel");
+    QUERY->add_arg(QUERY, "int", "index");
+    QUERY->doc_func(QUERY, "Get parameter label.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getParamDisplay, "string", "paramDisplay");
+    QUERY->add_arg(QUERY, "int", "index");
+    QUERY->doc_func(QUERY, "Get parameter display value.");
+
+    QUERY->add_mfun(QUERY, pluginhost_numParams, "int", "numParams");
+    QUERY->doc_func(QUERY, "Get number of parameters.");
+
+    QUERY->add_mfun(QUERY, pluginhost_numNonMidiParams, "int", "numNonMidiParams");
+    QUERY->doc_func(QUERY, "Get number of non-MIDI parameters.");
+
+    QUERY->add_mfun(QUERY, pluginhost_findParam, "int", "findParam");
+    QUERY->add_arg(QUERY, "string", "name");
+    QUERY->doc_func(QUERY, "Find parameter index by name.");
     
     QUERY->add_mfun(QUERY, pluginhost_load, "void", "load");
     QUERY->add_arg(QUERY, "string", "path");
@@ -591,6 +714,12 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_loadState, "void", "loadState");
     QUERY->add_arg(QUERY, "string", "path");
     QUERY->doc_func(QUERY, "Load plugin state from a file.");
+
+    QUERY->add_mfun(QUERY, pluginhost_showEditor, "void", "showEditor");
+    QUERY->doc_func(QUERY, "Show the plugin editor window.");
+
+    QUERY->add_mfun(QUERY, pluginhost_hideEditor, "void", "hideEditor");
+    QUERY->doc_func(QUERY, "Hide the plugin editor window.");
 
     QUERY->add_mfun(QUERY, pluginhost_asyncEventRunning, "int", "asyncEventRunning");
     QUERY->doc_func(QUERY, "Check if an async event is running.");
@@ -682,14 +811,57 @@ CK_DLL_TICKF(pluginhost_tick)
 CK_DLL_MFUN(pluginhost_setParam)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
-    RETURN->v_float = ph_obj->setParam(GET_NEXT_FLOAT(ARGS));
+    t_CKINT index = GET_NEXT_INT(ARGS);
+    t_CKFLOAT val = GET_NEXT_FLOAT(ARGS);
+    RETURN->v_float = ph_obj->setParam(index, val);
 }
 
 
 CK_DLL_MFUN(pluginhost_getParam)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
-    RETURN->v_float = ph_obj->getParam();
+    t_CKINT index = GET_NEXT_INT(ARGS);
+    RETURN->v_float = ph_obj->getParam(index);
+}
+
+CK_DLL_MFUN(pluginhost_getParamName)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT index = GET_NEXT_INT(ARGS);
+    RETURN->v_string = (Chuck_String *)API->object->create_string(VM, ph_obj->getParamName(index).c_str(), false);
+}
+
+CK_DLL_MFUN(pluginhost_getParamLabel)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT index = GET_NEXT_INT(ARGS);
+    RETURN->v_string = (Chuck_String *)API->object->create_string(VM, ph_obj->getParamLabel(index).c_str(), false);
+}
+
+CK_DLL_MFUN(pluginhost_getParamDisplay)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT index = GET_NEXT_INT(ARGS);
+    RETURN->v_string = (Chuck_String *)API->object->create_string(VM, ph_obj->getParamDisplay(index).c_str(), false);
+}
+
+CK_DLL_MFUN(pluginhost_numParams)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getNumParams();
+}
+
+CK_DLL_MFUN(pluginhost_numNonMidiParams)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getNumNonMidiParams();
+}
+
+CK_DLL_MFUN(pluginhost_findParam)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    std::string name = GET_NEXT_STRING_SAFE(ARGS);
+    RETURN->v_int = ph_obj->findParam(name);
 }
 
 CK_DLL_MFUN(pluginhost_load)
@@ -711,6 +883,18 @@ CK_DLL_MFUN(pluginhost_loadState)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     std::string path = GET_NEXT_STRING_SAFE(ARGS);
     ph_obj->loadState(path);
+}
+
+CK_DLL_MFUN(pluginhost_showEditor)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    ph_obj->showEditor();
+}
+
+CK_DLL_MFUN(pluginhost_hideEditor)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    ph_obj->hideEditor();
 }
 
 CK_DLL_MFUN(pluginhost_asyncEventRunning)
