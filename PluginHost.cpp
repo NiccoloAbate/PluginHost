@@ -27,6 +27,15 @@ CK_DLL_MFUN(pluginhost_waitForAsyncEvents);
 CK_DLL_MFUN(pluginhost_setForceSynchronous);
 CK_DLL_MFUN(pluginhost_getForceSynchronous);
 
+// PlayHead functions
+CK_DLL_MFUN(pluginhost_bpm);
+CK_DLL_MFUN(pluginhost_getBpm);
+CK_DLL_MFUN(pluginhost_timeSig);
+CK_DLL_MFUN(pluginhost_pos);
+CK_DLL_MFUN(pluginhost_getPos);
+CK_DLL_MFUN(pluginhost_playing);
+CK_DLL_MFUN(pluginhost_getPlaying);
+
 // tick function
 CK_DLL_TICKF(pluginhost_tick);
 
@@ -62,6 +71,51 @@ void callOnMessageThread(std::function<void()> func)
 //-----------------------------------------------------------------------------
 // PluginHost class definition
 //-----------------------------------------------------------------------------
+class PlayHead : public juce::AudioPlayHead
+{
+public:
+
+    juce::Optional<juce::AudioPlayHead::PositionInfo> getPosition() const override
+    {
+        juce::AudioPlayHead::PositionInfo info;
+        info.setBpm(bpm.load(std::memory_order_relaxed));
+        
+        juce::AudioPlayHead::TimeSignature ts;
+        ts.numerator = numerator.load(std::memory_order_relaxed);
+        ts.denominator = denominator.load(std::memory_order_relaxed);
+        info.setTimeSignature(ts);
+        
+        info.setIsPlaying(playing.load(std::memory_order_relaxed));
+        info.setPpqPosition(ppqPosition.load(std::memory_order_relaxed));
+        info.setTimeInSeconds(timeInSeconds.load(std::memory_order_relaxed));
+        
+        return info;
+    }
+
+    void setBpm(double b) { bpm.store(b, std::memory_order_relaxed); }
+    void setTimeSignature(int n, int d)
+    { 
+        numerator.store(n, std::memory_order_relaxed); 
+        denominator.store(d, std::memory_order_relaxed); 
+    }
+    void setPpqPosition(double p) { ppqPosition.store(p, std::memory_order_relaxed); }
+    void setPlaying(bool p) { playing.store(p, std::memory_order_relaxed); }
+    void setTimeInSeconds(double t) { timeInSeconds.store(t, std::memory_order_relaxed); }
+
+    double getBpm() const { return bpm.load(std::memory_order_relaxed); }
+    double getPpqPosition() const { return ppqPosition.load(std::memory_order_relaxed); }
+    bool getPlaying() const { return playing.load(std::memory_order_relaxed); }
+
+private:
+
+    std::atomic<double> bpm { 120.0 };
+    std::atomic<int> numerator { 4 };
+    std::atomic<int> denominator { 4 };
+    std::atomic<bool> playing { false };
+    std::atomic<double> ppqPosition { 0.0 };
+    std::atomic<double> timeInSeconds { 0.0 };
+};
+
 class PluginHost
 {
 public:
@@ -79,7 +133,7 @@ public:
         m_formatManager.addDefaultFormats();
 
         // Verify the Message Loop is spinning
-        juce::MessageManager::callAsync([context = createAsyncEventContext()]()
+        juce::MessageManager::callAsync([context = createAsyncEventContext()]
         {
             std::cout << "Message loop is spinning (callAsync)!\n";
         });
@@ -92,6 +146,8 @@ public:
         // Delete the plugin instance on the message thread
         if (m_plugin)
         {
+            // Safety: detach playhead before destruction as m_playHead will be destroyed with this PluginHost
+            m_plugin->setPlayHead(nullptr);
 
             // Destroy the plugin on the main thread
             std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
@@ -165,8 +221,8 @@ public:
         }
 
         // Dispatch loading to the message thread
-        callOnMainThread([this, file, context = createAsyncEventContext()]()
-        {            
+        callOnMainThread([this, file, context = createAsyncEventContext()]
+        {
             juce::AudioPluginFormat* format = nullptr;
             for (int i = 0; i < m_formatManager.getNumFormats(); ++i)
             {
@@ -217,6 +273,7 @@ public:
                     std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
 
                     m_plugin->prepareToPlay(m_srate, m_blockSize);
+                    m_plugin->setPlayHead(&m_playHead);
 
                     // request normal stereo layout
                     juce::AudioProcessor::BusesLayout normalLayout;
@@ -270,7 +327,7 @@ public:
 
     void saveState(const std::string& path)
     {
-        callOnMainThread([this, path, context = createAsyncEventContext()]()
+        callOnMainThread([this, path, context = createAsyncEventContext()]
         {
             if (!m_plugin)
             {
@@ -291,7 +348,7 @@ public:
 
     void loadState(const std::string& path)
     {
-        callOnMainThread([this, path, context = createAsyncEventContext()]()
+        callOnMainThread([this, path, context = createAsyncEventContext()]
         {
             if (!m_plugin)
             {
@@ -338,6 +395,35 @@ public:
         return m_forceSynchronous;
     }
 
+    void setBlockSize(int size)
+    {
+        if (size <= 0) return;
+
+        callOnMainThread([this, size, context = createAsyncEventContext()]
+        {
+            juce::SpinLock::ScopedLockType lock(m_audioLock);
+            m_blockSize = size;
+            m_renderBuffer.setSize(2, m_blockSize);
+
+            if (m_plugin)
+                m_plugin->prepareToPlay(m_srate, m_blockSize);
+        });
+    }
+
+    int getBlockSize() const
+    {
+        return m_blockSize;
+    }
+
+    // PlayHead accessors
+    float setBpm(float b) { m_playHead.setBpm(b); return b; }
+    float getBpm() { return m_playHead.getBpm(); }
+    void setTimeSig(int n, int d) { m_playHead.setTimeSignature(n, d); }
+    float setPos(float p) { m_playHead.setPpqPosition(p); return p; }
+    float getPos() { return m_playHead.getPpqPosition(); }
+    int setPlaying(int p) { m_playHead.setPlaying(p); return p; }
+    int getPlaying() { return m_playHead.getPlaying(); }
+
     // for now used fixed number of channels and lock it to stereo
     static constexpr int maxChannels = 2;
 
@@ -348,6 +434,7 @@ private:
     
     juce::AudioPluginFormatManager m_formatManager;
     juce::KnownPluginList m_knownPluginList;
+    PlayHead m_playHead;
     std::unique_ptr<juce::AudioPluginInstance> m_plugin;
     std::unique_ptr<PluginEditorWindow> m_editor;
     juce::AudioBuffer<float> m_renderBuffer;
@@ -468,6 +555,39 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_getForceSynchronous, "int", "forceSynchronous");
     QUERY->doc_func(QUERY, "Get whether synchronous execution of main thread events is forced.");
 
+    QUERY->add_mfun(QUERY, pluginhost_setBlockSize, "int", "blockSize");
+    QUERY->add_arg(QUERY, "int", "size");
+    QUERY->doc_func(QUERY, "Set the block size for plugin processing. This introduces a delay in exchange for more efficient processing.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getBlockSize, "int", "blockSize");
+    QUERY->doc_func(QUERY, "Get the block size for plugin processing.");
+
+    QUERY->add_mfun(QUERY, pluginhost_bpm, "float", "bpm");
+    QUERY->add_arg(QUERY, "float", "bpm");
+    QUERY->doc_func(QUERY, "Set BPM.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getBpm, "float", "bpm");
+    QUERY->doc_func(QUERY, "Get BPM.");
+
+    QUERY->add_mfun(QUERY, pluginhost_timeSig, "void", "timeSig");
+    QUERY->add_arg(QUERY, "int", "numerator");
+    QUERY->add_arg(QUERY, "int", "denominator");
+    QUERY->doc_func(QUERY, "Set time signature.");
+
+    QUERY->add_mfun(QUERY, pluginhost_pos, "float", "pos");
+    QUERY->add_arg(QUERY, "float", "ppq");
+    QUERY->doc_func(QUERY, "Set position in PPQ.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getPos, "float", "pos");
+    QUERY->doc_func(QUERY, "Get position in PPQ.");
+
+    QUERY->add_mfun(QUERY, pluginhost_playing, "int", "playing");
+    QUERY->add_arg(QUERY, "int", "playing");
+    QUERY->doc_func(QUERY, "Set playing status.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getPlaying, "int", "playing");
+    QUERY->doc_func(QUERY, "Get playing status.");
+
     // reserve a variable for internal class pointer
     pluginhost_data_offset = QUERY->add_mvar(QUERY, "int", "@ph_data", false);
 
@@ -567,4 +687,62 @@ CK_DLL_MFUN(pluginhost_getForceSynchronous)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     RETURN->v_int = ph_obj->getForceSynchronous();
+}
+
+CK_DLL_MFUN(pluginhost_setBlockSize)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT size = GET_NEXT_INT(ARGS);
+    ph_obj->setBlockSize(size);
+    RETURN->v_int = size;
+}
+
+CK_DLL_MFUN(pluginhost_getBlockSize)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getBlockSize();
+}
+
+CK_DLL_MFUN(pluginhost_bpm)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->setBpm(GET_NEXT_FLOAT(ARGS));
+}
+
+CK_DLL_MFUN(pluginhost_getBpm)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->getBpm();
+}
+
+CK_DLL_MFUN(pluginhost_timeSig)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT num = GET_NEXT_INT(ARGS);
+    t_CKINT den = GET_NEXT_INT(ARGS);
+    ph_obj->setTimeSig(num, den);
+}
+
+CK_DLL_MFUN(pluginhost_pos)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->setPos(GET_NEXT_FLOAT(ARGS));
+}
+
+CK_DLL_MFUN(pluginhost_getPos)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->getPos();
+}
+
+CK_DLL_MFUN(pluginhost_playing)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->setPlaying(GET_NEXT_INT(ARGS));
+}
+
+CK_DLL_MFUN(pluginhost_getPlaying)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getPlaying();
 }
