@@ -50,8 +50,13 @@ CK_DLL_MFUN(pluginhost_getPlaying);
 
 // MIDI functions
 CK_DLL_MFUN(pluginhost_noteOn);
+CK_DLL_MFUN(pluginhost_noteOn_default);
 CK_DLL_MFUN(pluginhost_noteOff);
+CK_DLL_MFUN(pluginhost_noteOff_default);
+CK_DLL_MFUN(pluginhost_allNotesOff);
+CK_DLL_MFUN(pluginhost_allNotesOff_default);
 CK_DLL_MFUN(pluginhost_controlChange);
+CK_DLL_MFUN(pluginhost_controlChange_default);
 CK_DLL_MFUN(pluginhost_midiMsg);
 
 // tick function
@@ -586,33 +591,33 @@ public:
     int getPlaying() { return m_playHead.getPlaying(); }
 
     // MIDI functions
-    void noteOn(int noteNumber, int velocity, int channel)
+    void noteOn(int noteNumber, float velocity, int channel)
     {
-        juce::MidiMessage msg = juce::MidiMessage::noteOn(channel, (juce::uint8)noteNumber, (juce::uint8)velocity);
-        int timestamp = m_inputBuffer.getAvailableSamples();
-        timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
-        m_inputMidi.addEvent(msg, timestamp);
+        addMidiEvent(juce::MidiMessage::noteOn(channel, (juce::uint8)noteNumber, velocity));
     }
 
-    void noteOff(int noteNumber, int velocity, int channel)
+    void noteOff(int noteNumber, int channel)
     {
-        juce::MidiMessage msg = juce::MidiMessage::noteOff(channel, (juce::uint8)noteNumber, (juce::uint8)velocity);
-        int timestamp = m_inputBuffer.getAvailableSamples();
-        timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
-        m_inputMidi.addEvent(msg, timestamp);
+        addMidiEvent(juce::MidiMessage::noteOff(channel, (juce::uint8)noteNumber, (juce::uint8)0));
+    }
+
+    void allNotesOff(int channel)
+    {
+        addMidiEvent(juce::MidiMessage::allNotesOff(channel));
     }
 
     void controlChange(int controlNumber, int value, int channel)
     {
-        juce::MidiMessage msg = juce::MidiMessage::controllerEvent(channel, controlNumber, (juce::uint8)value);
-        int timestamp = m_inputBuffer.getAvailableSamples();
-        timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
-        m_inputMidi.addEvent(msg, timestamp);
+        addMidiEvent(juce::MidiMessage::controllerEvent(channel, controlNumber, (juce::uint8)value));
     }
 
     void midiMsg(int byte1, int byte2, int byte3)
     {
-        juce::MidiMessage msg(byte1, byte2, byte3);
+        addMidiEvent(juce::MidiMessage(byte1, byte2, byte3));
+    }
+
+    void addMidiEvent(const juce::MidiMessage& msg)
+    {
         int timestamp = m_inputBuffer.getAvailableSamples();
         timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
         m_inputMidi.addEvent(msg, timestamp);
@@ -829,21 +834,41 @@ CK_DLL_QUERY( PluginHost )
 
     QUERY->add_mfun(QUERY, pluginhost_noteOn, "void", "noteOn");
     QUERY->add_arg(QUERY, "int", "note");
-    QUERY->add_arg(QUERY, "int", "velocity");
+    QUERY->add_arg(QUERY, "float", "velocity");
     QUERY->add_arg(QUERY, "int", "channel");
     QUERY->doc_func(QUERY, "Send a MIDI Note On message. Channel is 1-16.");
 
+    QUERY->add_mfun(QUERY, pluginhost_noteOn_default, "void", "noteOn");
+    QUERY->add_arg(QUERY, "int", "note");
+    QUERY->add_arg(QUERY, "float", "velocity");
+    QUERY->doc_func(QUERY, "Send a MIDI Note On message on default channel 0.");
+
     QUERY->add_mfun(QUERY, pluginhost_noteOff, "void", "noteOff");
     QUERY->add_arg(QUERY, "int", "note");
-    QUERY->add_arg(QUERY, "int", "velocity");
     QUERY->add_arg(QUERY, "int", "channel");
     QUERY->doc_func(QUERY, "Send a MIDI Note Off message. Channel is 1-16.");
+
+    QUERY->add_mfun(QUERY, pluginhost_noteOff_default, "void", "noteOff");
+    QUERY->add_arg(QUERY, "int", "note");
+    QUERY->doc_func(QUERY, "Send a MIDI Note Off message on default channel 0.");
+
+    QUERY->add_mfun(QUERY, pluginhost_allNotesOff, "void", "allNotesOff");
+    QUERY->add_arg(QUERY, "int", "channel");
+    QUERY->doc_func(QUERY, "Send a MIDI All Notes Off message. Channel is 1-16.");
+
+    QUERY->add_mfun(QUERY, pluginhost_allNotesOff_default, "void", "allNotesOff");
+    QUERY->doc_func(QUERY, "Send a MIDI All Notes Off message on default channel 0.");
 
     QUERY->add_mfun(QUERY, pluginhost_controlChange, "void", "controlChange");
     QUERY->add_arg(QUERY, "int", "control");
     QUERY->add_arg(QUERY, "int", "value");
     QUERY->add_arg(QUERY, "int", "channel");
     QUERY->doc_func(QUERY, "Send a MIDI Control Change message. Channel is 1-16.");
+
+    QUERY->add_mfun(QUERY, pluginhost_controlChange_default, "void", "controlChange");
+    QUERY->add_arg(QUERY, "int", "control");
+    QUERY->add_arg(QUERY, "int", "value");
+    QUERY->doc_func(QUERY, "Send a MIDI Control Change message on default channel 0.");
 
     QUERY->add_mfun(QUERY, pluginhost_midiMsg, "void", "midiMsg");
     QUERY->add_arg(QUERY, "int", "byte1");
@@ -1064,18 +1089,45 @@ CK_DLL_MFUN(pluginhost_noteOn)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT note = GET_NEXT_INT(ARGS);
-    t_CKINT vel = GET_NEXT_INT(ARGS);
+    t_CKFLOAT vel = GET_NEXT_FLOAT(ARGS);
     t_CKINT chan = GET_NEXT_INT(ARGS);
-    if( ph_obj ) ph_obj->noteOn(note, vel, chan);
+    if( ph_obj ) ph_obj->noteOn(note, (float)vel, chan);
+}
+
+CK_DLL_MFUN(pluginhost_noteOn_default)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT note = GET_NEXT_INT(ARGS);
+    t_CKFLOAT vel = GET_NEXT_FLOAT(ARGS);
+    if( ph_obj ) ph_obj->noteOn(note, (float)vel, 0);
 }
 
 CK_DLL_MFUN(pluginhost_noteOff)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT note = GET_NEXT_INT(ARGS);
-    t_CKINT vel = GET_NEXT_INT(ARGS);
     t_CKINT chan = GET_NEXT_INT(ARGS);
-    if( ph_obj ) ph_obj->noteOff(note, vel, chan);
+    if( ph_obj ) ph_obj->noteOff(note, chan);
+}
+
+CK_DLL_MFUN(pluginhost_noteOff_default)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT note = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->noteOff(note, 0);
+}
+
+CK_DLL_MFUN(pluginhost_allNotesOff)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT chan = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->allNotesOff(chan);
+}
+
+CK_DLL_MFUN(pluginhost_allNotesOff_default)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    if( ph_obj ) ph_obj->allNotesOff(0);
 }
 
 CK_DLL_MFUN(pluginhost_controlChange)
@@ -1085,6 +1137,14 @@ CK_DLL_MFUN(pluginhost_controlChange)
     t_CKINT val = GET_NEXT_INT(ARGS);
     t_CKINT chan = GET_NEXT_INT(ARGS);
     if( ph_obj ) ph_obj->controlChange(ctrl, val, chan);
+}
+
+CK_DLL_MFUN(pluginhost_controlChange_default)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT ctrl = GET_NEXT_INT(ARGS);
+    t_CKINT val = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->controlChange(ctrl, val, 0);
 }
 
 CK_DLL_MFUN(pluginhost_midiMsg)

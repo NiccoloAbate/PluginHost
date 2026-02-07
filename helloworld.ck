@@ -35,9 +35,9 @@ fun void playNotes()
     for (0 => int i; i < 10; ++i)
     {
         0.25::second => now;
-        plugin.noteOn(60+i, 127, 0);
+        plugin.noteOn(60+i, 1.0);
         0.25::second => now;
-        plugin.noteOff(60+i, 127, 0);
+        plugin.noteOff(60+i);
     }
 } spork ~playNotes();
 
