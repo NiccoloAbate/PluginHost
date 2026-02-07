@@ -5,6 +5,9 @@ PluginHost plugin;
 // tell the plugin to run in synchronous mode
 plugin.forceSynchronous(true);
 
+// set the block size
+plugin.blockSize(16);
+
 // load the plugin
 plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
 //plugin.load("/Library/Audio/Plug-Ins/VST3/Graphiti.vst3");
@@ -26,6 +29,17 @@ for(0 => int i; i < plugin.numNonMidiParams(); i++)
     <<< i, ": ", plugin.paramName(i), "(" + plugin.paramLabel(i) + ")" >>>;
 
 plugin => dac;
+
+fun void playNotes()
+{
+    for (0 => int i; i < 10; ++i)
+    {
+        0.25::second => now;
+        plugin.noteOn(60+i, 127, 0);
+        0.25::second => now;
+        plugin.noteOff(60+i, 127, 0);
+    }
+} spork ~playNotes();
 
 // window title
 GG.windowTitle("ChucK/ChuGl/JUCE");

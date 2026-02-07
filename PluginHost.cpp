@@ -1,6 +1,6 @@
 /*-----------------------------------------------------------------------------
- PluginHost.cpp
- -----------------------------------------------------------------------------*/
+PluginHost.cpp
+-----------------------------------------------------------------------------*/
 
 #include "chugin.h"
 #include "JuceHeader.h"
@@ -47,6 +47,12 @@ CK_DLL_MFUN(pluginhost_pos);
 CK_DLL_MFUN(pluginhost_getPos);
 CK_DLL_MFUN(pluginhost_playing);
 CK_DLL_MFUN(pluginhost_getPlaying);
+
+// MIDI functions
+CK_DLL_MFUN(pluginhost_noteOn);
+CK_DLL_MFUN(pluginhost_noteOff);
+CK_DLL_MFUN(pluginhost_controlChange);
+CK_DLL_MFUN(pluginhost_midiMsg);
 
 // tick function
 CK_DLL_TICKF(pluginhost_tick);
@@ -188,6 +194,14 @@ public:
 
         if (nframes == m_blockSize)
         {
+            // clear old output midi
+            m_outputMidi.clear();
+            if (m_inputMidi.getNumEvents() > 0)
+            {
+                m_outputMidi.addEvents(m_inputMidi, 0, m_blockSize, 0);
+                m_inputMidi.clear();
+            }
+
             if (m_plugin)
             {
                 // de-interleave input to m_renderBuffer
@@ -198,15 +212,13 @@ public:
                         dest[f] = in[f * numChannels + c];
                 }
 
-                m_midiBuffer.clear();
-
                 // check the number of channels that a plugin actually wants (some might require sidechain inputs)
                 const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
                 // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
                 if (totalNumChannels > maxChannels)
                     std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
 
-                m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
+                m_plugin->processBlock(m_renderBuffer, m_outputMidi);
 
                 // interleave output from m_renderBuffer
                 for(int c = 0; c < numChannels; c++)
@@ -237,17 +249,23 @@ public:
             {
                 if (m_inputBuffer.pop(m_renderBuffer))
                 {
+                    // clear old output midi
+                    m_outputMidi.clear();
+                    if (m_inputMidi.getNumEvents() > 0)
+                    {
+                        m_outputMidi.addEvents(m_inputMidi, 0, m_blockSize, 0);
+                        m_inputMidi.clear();
+                    }
+
                     if (m_plugin)
                     {
-                        m_midiBuffer.clear();
-
                         // check the number of channels that a plugin actually wants (some might require sidechain inputs)
                         const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
                         // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
                         if (totalNumChannels > maxChannels)
                             std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
 
-                        m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
+                        m_plugin->processBlock(m_renderBuffer, m_outputMidi);
                     }
                     
                     m_outputBuffer.push(m_renderBuffer);
@@ -567,6 +585,39 @@ public:
     int setPlaying(int p) { m_playHead.setPlaying(p); return p; }
     int getPlaying() { return m_playHead.getPlaying(); }
 
+    // MIDI functions
+    void noteOn(int noteNumber, int velocity, int channel)
+    {
+        juce::MidiMessage msg = juce::MidiMessage::noteOn(channel, (juce::uint8)noteNumber, (juce::uint8)velocity);
+        int timestamp = m_inputBuffer.getAvailableSamples();
+        timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
+        m_inputMidi.addEvent(msg, timestamp);
+    }
+
+    void noteOff(int noteNumber, int velocity, int channel)
+    {
+        juce::MidiMessage msg = juce::MidiMessage::noteOff(channel, (juce::uint8)noteNumber, (juce::uint8)velocity);
+        int timestamp = m_inputBuffer.getAvailableSamples();
+        timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
+        m_inputMidi.addEvent(msg, timestamp);
+    }
+
+    void controlChange(int controlNumber, int value, int channel)
+    {
+        juce::MidiMessage msg = juce::MidiMessage::controllerEvent(channel, controlNumber, (juce::uint8)value);
+        int timestamp = m_inputBuffer.getAvailableSamples();
+        timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
+        m_inputMidi.addEvent(msg, timestamp);
+    }
+
+    void midiMsg(int byte1, int byte2, int byte3)
+    {
+        juce::MidiMessage msg(byte1, byte2, byte3);
+        int timestamp = m_inputBuffer.getAvailableSamples();
+        timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
+        m_inputMidi.addEvent(msg, timestamp);
+    }
+
     // for now used fixed number of channels and lock it to stereo
     static constexpr int maxChannels = 2;
 
@@ -584,10 +635,13 @@ private:
     std::unique_ptr<PluginEditorWindow> m_editor;
     // audio render buffer
     juce::AudioBuffer<float> m_renderBuffer;
-    // MIDI buffer
-    juce::MidiBuffer m_midiBuffer;
+    // accumulated MIDI buffer which will be used as input
+    juce::MidiBuffer m_inputMidi;
+    // processed MIDI buffer which will store the midi output
+    juce::MidiBuffer m_outputMidi;
 
     // brute force synchronization - use sparingly
+    // currently used for protecting critical audio processing code, such as resizing buffers
     juce::SpinLock m_audioLock;
 
     double m_srate;
@@ -773,6 +827,30 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_getPlaying, "int", "playing");
     QUERY->doc_func(QUERY, "Get playing status.");
 
+    QUERY->add_mfun(QUERY, pluginhost_noteOn, "void", "noteOn");
+    QUERY->add_arg(QUERY, "int", "note");
+    QUERY->add_arg(QUERY, "int", "velocity");
+    QUERY->add_arg(QUERY, "int", "channel");
+    QUERY->doc_func(QUERY, "Send a MIDI Note On message. Channel is 1-16.");
+
+    QUERY->add_mfun(QUERY, pluginhost_noteOff, "void", "noteOff");
+    QUERY->add_arg(QUERY, "int", "note");
+    QUERY->add_arg(QUERY, "int", "velocity");
+    QUERY->add_arg(QUERY, "int", "channel");
+    QUERY->doc_func(QUERY, "Send a MIDI Note Off message. Channel is 1-16.");
+
+    QUERY->add_mfun(QUERY, pluginhost_controlChange, "void", "controlChange");
+    QUERY->add_arg(QUERY, "int", "control");
+    QUERY->add_arg(QUERY, "int", "value");
+    QUERY->add_arg(QUERY, "int", "channel");
+    QUERY->doc_func(QUERY, "Send a MIDI Control Change message. Channel is 1-16.");
+
+    QUERY->add_mfun(QUERY, pluginhost_midiMsg, "void", "midiMsg");
+    QUERY->add_arg(QUERY, "int", "byte1");
+    QUERY->add_arg(QUERY, "int", "byte2");
+    QUERY->add_arg(QUERY, "int", "byte3");
+    QUERY->doc_func(QUERY, "Send a raw 3-byte MIDI message.");
+
     // reserve a variable for internal class pointer
     pluginhost_data_offset = QUERY->add_mvar(QUERY, "int", "@ph_data", false);
 
@@ -794,7 +872,6 @@ CK_DLL_CTOR(pluginhost_ctor)
     OBJ_MEMBER_INT(SELF, pluginhost_data_offset) = (t_CKINT) ph_obj;
 }
 
-
 CK_DLL_DTOR(pluginhost_dtor)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
@@ -805,14 +882,12 @@ CK_DLL_DTOR(pluginhost_dtor)
     }
 }
 
-
 CK_DLL_TICKF(pluginhost_tick)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     if( ph_obj ) ph_obj->tick(in, out, nframes);
     return TRUE;
 }
-
 
 CK_DLL_MFUN(pluginhost_setParam)
 {
@@ -821,7 +896,6 @@ CK_DLL_MFUN(pluginhost_setParam)
     t_CKFLOAT val = GET_NEXT_FLOAT(ARGS);
     RETURN->v_float = ph_obj->setParam(index, val);
 }
-
 
 CK_DLL_MFUN(pluginhost_getParam)
 {
@@ -984,4 +1058,40 @@ CK_DLL_MFUN(pluginhost_getPlaying)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     RETURN->v_int = ph_obj->getPlaying();
+}
+
+CK_DLL_MFUN(pluginhost_noteOn)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT note = GET_NEXT_INT(ARGS);
+    t_CKINT vel = GET_NEXT_INT(ARGS);
+    t_CKINT chan = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->noteOn(note, vel, chan);
+}
+
+CK_DLL_MFUN(pluginhost_noteOff)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT note = GET_NEXT_INT(ARGS);
+    t_CKINT vel = GET_NEXT_INT(ARGS);
+    t_CKINT chan = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->noteOff(note, vel, chan);
+}
+
+CK_DLL_MFUN(pluginhost_controlChange)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT ctrl = GET_NEXT_INT(ARGS);
+    t_CKINT val = GET_NEXT_INT(ARGS);
+    t_CKINT chan = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->controlChange(ctrl, val, chan);
+}
+
+CK_DLL_MFUN(pluginhost_midiMsg)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT b1 = GET_NEXT_INT(ARGS);
+    t_CKINT b2 = GET_NEXT_INT(ARGS);
+    t_CKINT b3 = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->midiMsg(b1, b2, b3);
 }
