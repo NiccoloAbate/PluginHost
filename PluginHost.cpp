@@ -23,6 +23,9 @@ CK_DLL_MFUN(pluginhost_load);
 CK_DLL_MFUN(pluginhost_saveState);
 CK_DLL_MFUN(pluginhost_loadState);
 CK_DLL_MFUN(pluginhost_asyncEventRunning);
+CK_DLL_MFUN(pluginhost_waitForAsyncEvents);
+CK_DLL_MFUN(pluginhost_setForceSynchronous);
+CK_DLL_MFUN(pluginhost_getForceSynchronous);
 
 // tick function
 CK_DLL_TICKF(pluginhost_tick);
@@ -325,6 +328,16 @@ public:
             std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
 
+    void setForceSynchronous(bool b)
+    {
+        m_forceSynchronous = b;
+    }
+
+    bool getForceSynchronous() const
+    {
+        return m_forceSynchronous;
+    }
+
     // for now used fixed number of channels and lock it to stereo
     static constexpr int maxChannels = 2;
 
@@ -456,6 +469,16 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_asyncEventRunning, "int", "asyncEventRunning");
     QUERY->doc_func(QUERY, "Check if an async event is running.");
 
+    QUERY->add_mfun(QUERY, pluginhost_waitForAsyncEvents, "void", "waitForAsyncEvents");
+    QUERY->doc_func(QUERY, "Wait for all async events to finish. WARNING: This is not realtime safe and should only be used for debugging or in non-realtime contexts.");
+
+    QUERY->add_mfun(QUERY, pluginhost_setForceSynchronous, "int", "forceSynchronous");
+    QUERY->add_arg(QUERY, "int", "b");
+    QUERY->doc_func(QUERY, "Set whether to force synchronous execution of main thread events. If true, audio processing may block.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getForceSynchronous, "int", "forceSynchronous");
+    QUERY->doc_func(QUERY, "Get whether synchronous execution of main thread events is forced.");
+
     // reserve a variable for internal class pointer
     pluginhost_data_offset = QUERY->add_mvar(QUERY, "int", "@ph_data", false);
 
@@ -535,4 +558,24 @@ CK_DLL_MFUN(pluginhost_asyncEventRunning)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     RETURN->v_int = ph_obj->asyncEventRunning();
+}
+
+CK_DLL_MFUN(pluginhost_waitForAsyncEvents)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    ph_obj->waitForAsyncEvents();
+}
+
+CK_DLL_MFUN(pluginhost_setForceSynchronous)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT b = GET_NEXT_INT(ARGS);
+    ph_obj->setForceSynchronous(b);
+    RETURN->v_int = b;
+}
+
+CK_DLL_MFUN(pluginhost_getForceSynchronous)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getForceSynchronous();
 }

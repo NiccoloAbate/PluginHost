@@ -2,11 +2,14 @@
 
 PluginHost plugin;
 
+plugin.forceSynchronous(true);
+
 //plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
 plugin.load("/Library/Audio/Plug-Ins/VST3/Graphiti.vst3");
 
 // while (plugin.asyncEventRunning())
     // 1::ms => now;
+// plugin.waitForAsyncEvent();
 
 //plugin.saveState("/Users/niccoloabate/Downloads/chuckGraphitiState");
 plugin.loadState("/Users/niccoloabate/Downloads/chuckGraphitiState");
