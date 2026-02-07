@@ -158,8 +158,8 @@ public:
     PluginHost( t_CKFLOAT fs )
     :
       m_renderBuffer(2, 16),
-      m_inputBuffer(2, maxBufferSize * 2),
-      m_outputBuffer(2, maxBufferSize * 2)
+      m_inputBuffer(2, maxBufferSize + 1),
+      m_outputBuffer(2, maxBufferSize + 1)
     {
         m_srate = fs;
         // default block size
@@ -170,12 +170,6 @@ public:
         
         // register plugin formats
         m_formatManager.addDefaultFormats();
-
-        // verify the Message Loop is spinning
-        juce::MessageManager::callAsync([context = createAsyncEventContext()]
-        {
-            std::cout << "Message loop is spinning (callAsync)!\n";
-        });
     }
     
     ~PluginHost()
@@ -574,7 +568,7 @@ public:
         callOnMainThread([this, size, context = createAsyncEventContext()]
         {
             juce::SpinLock::ScopedLockType lock(m_audioLock);
-            m_blockSize = size;
+            m_blockSize = std::min(size, maxBufferSize);
             m_renderBuffer.setSize(2, m_blockSize);
 
             if (m_plugin)
