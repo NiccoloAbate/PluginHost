@@ -26,6 +26,8 @@ CK_DLL_MFUN(pluginhost_asyncEventRunning);
 CK_DLL_MFUN(pluginhost_waitForAsyncEvents);
 CK_DLL_MFUN(pluginhost_setForceSynchronous);
 CK_DLL_MFUN(pluginhost_getForceSynchronous);
+CK_DLL_MFUN(pluginhost_setBlockSize);
+CK_DLL_MFUN(pluginhost_getBlockSize);
 
 // tick function
 CK_DLL_TICKF(pluginhost_tick);
@@ -67,12 +69,15 @@ class PluginHost
 public:
 
     PluginHost( t_CKFLOAT fs ) 
-    : m_renderBuffer(2, m_blockSize),
-      m_inputBuffer(2, maxBlockSize),
-      m_outputBuffer(2, maxBlockSize)
+    : m_renderBuffer(2, 16),
+      m_inputBuffer(2, maxBufferSize * 2),
+      m_outputBuffer(2, maxBufferSize * 2)
     {
         m_srate = fs;
-
+        // default block size
+        m_blockSize = 16;
+        // resize render buffer to match default block size
+        m_renderBuffer.setSize(2, m_blockSize);
         m_renderBuffer.clear();
         
         // Register plugin formats
@@ -106,6 +111,15 @@ public:
     void tick( SAMPLE * in, SAMPLE * out, int nframes )
     {
         constexpr int numChannels = maxChannels;
+
+        // fine when there is no contention
+        juce::SpinLock::ScopedLockType lock(m_audioLock);
+
+        if (nframes == m_blockSize)
+        {
+            // just wrap the channels in a juce buffer and pass it to the plugin
+
+        }
 
         for(int f = 0; f < nframes; f++)
         {
@@ -215,7 +229,7 @@ public:
 
                     m_plugin = std::move(instance);
                     std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
-
+                    
                     m_plugin->prepareToPlay(m_srate, m_blockSize);
 
                     // request normal stereo layout
@@ -338,6 +352,26 @@ public:
         return m_forceSynchronous;
     }
 
+    void setBlockSize(int size)
+    {
+        if (size <= 0) return;
+
+        callOnMainThread([this, size, context = createAsyncEventContext()]()
+        {
+            juce::SpinLock::ScopedLockType lock(m_audioLock);
+            m_blockSize = size;
+            m_renderBuffer.setSize(2, m_blockSize);
+
+            if (m_plugin)
+                m_plugin->prepareToPlay(m_srate, m_blockSize);
+        });
+    }
+
+    int getBlockSize() const
+    {
+        return m_blockSize;
+    }
+
     // for now used fixed number of channels and lock it to stereo
     static constexpr int maxChannels = 2;
 
@@ -353,8 +387,11 @@ private:
     juce::AudioBuffer<float> m_renderBuffer;
     juce::MidiBuffer m_midiBuffer;
 
-    static constexpr int m_blockSize = 16;
-    static constexpr int maxBlockSize = 128;
+    // brute force synchronization - use sparingly
+    juce::SpinLock m_audioLock;
+
+    int m_blockSize = 16;
+    static constexpr int maxBufferSize = 256;
     CircularBuffer m_inputBuffer;
     CircularBuffer m_outputBuffer;
 
@@ -459,14 +496,21 @@ CK_DLL_QUERY( PluginHost )
     QUERY->doc_func(QUERY, "Check if an async event is running.");
 
     QUERY->add_mfun(QUERY, pluginhost_waitForAsyncEvents, "void", "waitForAsyncEvents");
-    QUERY->doc_func(QUERY, "Wait for all async events to finish. WARNING: This is not realtime safe and should only be used for debugging or in non-realtime contexts.");
+    QUERY->doc_func(QUERY, "Wait for all async events to finish. WARNING: This is not realtime safe and should only be used in non-realtime contexts (such as setup) or for debugging.");
 
     QUERY->add_mfun(QUERY, pluginhost_setForceSynchronous, "int", "forceSynchronous");
     QUERY->add_arg(QUERY, "int", "b");
-    QUERY->doc_func(QUERY, "Set whether to force synchronous execution of main thread events. If true, audio processing may block.");
+    QUERY->doc_func(QUERY, "Set whether to force synchronous execution of main thread events. If true, there is no need to wait on asynchronous events, but audio processing may block.");
 
     QUERY->add_mfun(QUERY, pluginhost_getForceSynchronous, "int", "forceSynchronous");
     QUERY->doc_func(QUERY, "Get whether synchronous execution of main thread events is forced.");
+
+    QUERY->add_mfun(QUERY, pluginhost_setBlockSize, "int", "blockSize");
+    QUERY->add_arg(QUERY, "int", "size");
+    QUERY->doc_func(QUERY, "Set the block size for plugin processing. This introduces a delay in exchange for more efficient processing.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getBlockSize, "int", "blockSize");
+    QUERY->doc_func(QUERY, "Get the block size for plugin processing.");
 
     // reserve a variable for internal class pointer
     pluginhost_data_offset = QUERY->add_mvar(QUERY, "int", "@ph_data", false);
@@ -567,4 +611,18 @@ CK_DLL_MFUN(pluginhost_getForceSynchronous)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     RETURN->v_int = ph_obj->getForceSynchronous();
+}
+
+CK_DLL_MFUN(pluginhost_setBlockSize)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT size = GET_NEXT_INT(ARGS);
+    ph_obj->setBlockSize(size);
+    RETURN->v_int = size;
+}
+
+CK_DLL_MFUN(pluginhost_getBlockSize)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getBlockSize();
 }
