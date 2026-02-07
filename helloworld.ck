@@ -24,9 +24,15 @@ plugin.showEditor();
 //plugin.saveState("/Users/niccoloabate/Downloads/chuckGraphitiState");
 plugin.loadState("/Users/niccoloabate/Downloads/chuckGraphitiState");
 
-// print parameter names
+// print parameters
+<<< plugin.numParams(), "params:" >>>;
 for(0 => int i; i < plugin.numNonMidiParams(); i++)
-    <<< i, ": ", plugin.paramName(i), "(" + plugin.paramLabel(i) + ")" >>>;
+    <<< i, ":", plugin.paramName(i), "(" + plugin.paramLabel(i) + ")" >>>;
+
+// print "programs"
+<<< plugin.numPrograms(), "programs:" >>>;
+for(0 => int i; i < plugin.numPrograms(); i++)
+    <<< i, ":", plugin.programName(i) >>>;
 
 plugin => dac;
 

@@ -26,6 +26,12 @@ CK_DLL_MFUN(pluginhost_numParams);
 CK_DLL_MFUN(pluginhost_numNonMidiParams);
 CK_DLL_MFUN(pluginhost_findParam);
 
+// program functions
+CK_DLL_MFUN(pluginhost_numPrograms);
+CK_DLL_MFUN(pluginhost_program);
+CK_DLL_MFUN(pluginhost_getProgram);
+CK_DLL_MFUN(pluginhost_programName);
+
 // other functions
 CK_DLL_MFUN(pluginhost_load);
 CK_DLL_MFUN(pluginhost_saveState);
@@ -581,6 +587,37 @@ public:
         return m_blockSize;
     }
 
+    // program functions
+    int getNumPrograms()
+    {
+        if (!m_plugin) return 0;
+        return m_plugin->getNumPrograms();
+    }
+
+    int getCurrentProgram()
+    {
+        if (!m_plugin) return 0;
+        return m_plugin->getCurrentProgram();
+    }
+
+    void setCurrentProgram(int index)
+    {
+        if (!m_plugin) return;
+        if (index < 0 || index >= m_plugin->getNumPrograms()) return;
+
+        callOnMainThread([this, index, context = createAsyncEventContext()]
+        {
+            m_plugin->setCurrentProgram(index);
+        });
+    }
+
+    std::string getProgramName(int index)
+    {
+        if (!m_plugin) return "";
+        if (index < 0 || index >= m_plugin->getNumPrograms()) return "";
+        return m_plugin->getProgramName(index).toStdString();
+    }
+
     // playHead accessors
     float setBpm(float b) { m_playHead.setBpm(b); return b; }
     float getBpm() { return m_playHead.getBpm(); }
@@ -767,6 +804,20 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_findParam, "int", "findParam");
     QUERY->add_arg(QUERY, "string", "name");
     QUERY->doc_func(QUERY, "Find parameter index by name.");
+
+    QUERY->add_mfun(QUERY, pluginhost_numPrograms, "int", "numPrograms");
+    QUERY->doc_func(QUERY, "Get number of programs.");
+
+    QUERY->add_mfun(QUERY, pluginhost_program, "int", "program");
+    QUERY->add_arg(QUERY, "int", "index");
+    QUERY->doc_func(QUERY, "Set current program index.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getProgram, "int", "program");
+    QUERY->doc_func(QUERY, "Get current program index.");
+
+    QUERY->add_mfun(QUERY, pluginhost_programName, "string", "programName");
+    QUERY->add_arg(QUERY, "int", "index");
+    QUERY->doc_func(QUERY, "Get program name.");
     
     QUERY->add_mfun(QUERY, pluginhost_load, "void", "load");
     QUERY->add_arg(QUERY, "string", "path");
@@ -967,6 +1018,33 @@ CK_DLL_MFUN(pluginhost_findParam)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     std::string name = GET_NEXT_STRING_SAFE(ARGS);
     RETURN->v_int = ph_obj->findParam(name);
+}
+
+CK_DLL_MFUN(pluginhost_numPrograms)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getNumPrograms();
+}
+
+CK_DLL_MFUN(pluginhost_program)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT index = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->setCurrentProgram(index);
+    RETURN->v_int = index;
+}
+
+CK_DLL_MFUN(pluginhost_getProgram)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getCurrentProgram();
+}
+
+CK_DLL_MFUN(pluginhost_programName)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT index = GET_NEXT_INT(ARGS);
+    RETURN->v_string = (Chuck_String *)API->object->create_string(VM, ph_obj->getProgramName(index).c_str(), false);
 }
 
 CK_DLL_MFUN(pluginhost_load)
