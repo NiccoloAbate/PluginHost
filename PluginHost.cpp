@@ -44,6 +44,14 @@ CK_DLL_MFUN(pluginhost_setForceSynchronous);
 CK_DLL_MFUN(pluginhost_getForceSynchronous);
 CK_DLL_MFUN(pluginhost_setBlockSize);
 CK_DLL_MFUN(pluginhost_getBlockSize);
+CK_DLL_MFUN(pluginhost_latency);
+CK_DLL_MFUN(pluginhost_setBypass);
+CK_DLL_MFUN(pluginhost_getBypass);
+CK_DLL_MFUN(pluginhost_reset);
+CK_DLL_MFUN(pluginhost_numInputs);
+CK_DLL_MFUN(pluginhost_numOutputs);
+CK_DLL_MFUN(pluginhost_setRealtime);
+CK_DLL_MFUN(pluginhost_getRealtime);
 
 // playhead functions
 CK_DLL_MFUN(pluginhost_bpm);
@@ -61,6 +69,12 @@ CK_DLL_MFUN(pluginhost_noteOff);
 CK_DLL_MFUN(pluginhost_noteOff_default);
 CK_DLL_MFUN(pluginhost_allNotesOff);
 CK_DLL_MFUN(pluginhost_allNotesOff_default);
+CK_DLL_MFUN(pluginhost_pitchBend);
+CK_DLL_MFUN(pluginhost_pitchBend_default);
+CK_DLL_MFUN(pluginhost_aftertouch);
+CK_DLL_MFUN(pluginhost_aftertouch_default);
+CK_DLL_MFUN(pluginhost_aftertouchChannel);
+CK_DLL_MFUN(pluginhost_aftertouchChannel_default);
 CK_DLL_MFUN(pluginhost_controlChange);
 CK_DLL_MFUN(pluginhost_controlChange_default);
 CK_DLL_MFUN(pluginhost_midiMsg);
@@ -581,6 +595,46 @@ public:
         return m_blockSize;
     }
 
+    int getLatency() const
+    {
+        return m_plugin ? m_plugin->getLatencySamples() : 0;
+    }
+
+    void setBypass(bool b)
+    {
+        if (m_plugin) m_plugin->suspendProcessing(b);
+    }
+
+    bool getBypass() const
+    {
+        return m_plugin ? m_plugin->isSuspended() : false;
+    }
+
+    void reset()
+    {
+        if (m_plugin) m_plugin->reset();
+    }
+
+    int getNumInputs() const
+    {
+        return m_plugin ? m_plugin->getTotalNumInputChannels() : 0;
+    }
+
+    int getNumOutputs() const
+    {
+        return m_plugin ? m_plugin->getTotalNumOutputChannels() : 0;
+    }
+
+    void setRealtime(bool b)
+    {
+        if (m_plugin) m_plugin->setNonRealtime(!b);
+    }
+
+    bool isRealtime() const
+    {
+        return m_plugin ? !m_plugin->isNonRealtime() : false;
+    }
+
     // program functions
     int getNumPrograms()
     {
@@ -635,6 +689,23 @@ public:
     void allNotesOff(int channel)
     {
         addMidiEvent(juce::MidiMessage::allNotesOff(channel));
+    }
+
+    void pitchBend(float value, int channel)
+    {
+        int wheelValue = (int)((value + 1.0f) * 8191.5f);
+        wheelValue = std::max(0, std::min(16383, wheelValue));
+        addMidiEvent(juce::MidiMessage::pitchWheel(channel, wheelValue));
+    }
+
+    void aftertouch(int noteNumber, float pressure, int channel)
+    {
+        addMidiEvent(juce::MidiMessage::aftertouchChange(channel, (juce::uint8)noteNumber, (juce::uint8)(pressure * 127.0f)));
+    }
+
+    void aftertouchChannel(float pressure, int channel)
+    {
+        addMidiEvent(juce::MidiMessage::channelPressureChange(channel, (juce::uint8)(pressure * 127.0f)));
     }
 
     void controlChange(int controlNumber, int value, int channel)
@@ -851,6 +922,32 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_getBlockSize, "int", "blockSize");
     QUERY->doc_func(QUERY, "Get the block size for plugin processing.");
 
+    QUERY->add_mfun(QUERY, pluginhost_latency, "int", "latency");
+    QUERY->doc_func(QUERY, "Get plugin latency in samples.");
+
+    QUERY->add_mfun(QUERY, pluginhost_setBypass, "int", "bypass");
+    QUERY->add_arg(QUERY, "int", "b");
+    QUERY->doc_func(QUERY, "Set whether the plugin is bypassed.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getBypass, "int", "bypass");
+    QUERY->doc_func(QUERY, "Get whether the plugin is bypassed.");
+
+    QUERY->add_mfun(QUERY, pluginhost_reset, "void", "reset");
+    QUERY->doc_func(QUERY, "Reset the plugin's internal state.");
+
+    QUERY->add_mfun(QUERY, pluginhost_numInputs, "int", "numInputs");
+    QUERY->doc_func(QUERY, "Get total number of input channels.");
+
+    QUERY->add_mfun(QUERY, pluginhost_numOutputs, "int", "numOutputs");
+    QUERY->doc_func(QUERY, "Get total number of output channels.");
+
+    QUERY->add_mfun(QUERY, pluginhost_setRealtime, "int", "realtime");
+    QUERY->add_arg(QUERY, "int", "b");
+    QUERY->doc_func(QUERY, "Set whether the plugin operates in realtime mode.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getRealtime, "int", "realtime");
+    QUERY->doc_func(QUERY, "Get whether the plugin operates in realtime mode.");
+
     QUERY->add_mfun(QUERY, pluginhost_bpm, "float", "bpm");
     QUERY->add_arg(QUERY, "float", "bpm");
     QUERY->doc_func(QUERY, "Set BPM.");
@@ -903,6 +1000,41 @@ CK_DLL_QUERY( PluginHost )
 
     QUERY->add_mfun(QUERY, pluginhost_allNotesOff_default, "void", "allNotesOff");
     QUERY->doc_func(QUERY, "Send a MIDI All Notes Off message on default channel 0.");
+
+    // Version with channel
+    QUERY->add_mfun(QUERY, pluginhost_pitchBend, "void", "pitchBend");
+    QUERY->add_arg(QUERY, "float", "value");
+    QUERY->add_arg(QUERY, "int", "channel");
+    QUERY->doc_func(QUERY, "Send a MIDI Pitch Bend message (-1.0 to 1.0). Channel is 1-16.");
+
+    // Version without channel (defaulting to 0)
+    QUERY->add_mfun(QUERY, pluginhost_pitchBend_default, "void", "pitchBend");
+    QUERY->add_arg(QUERY, "float", "value");
+    QUERY->doc_func(QUERY, "Send a MIDI Pitch Bend message (-1.0 to 1.0) on default channel 0.");
+
+    // Version with channel
+    QUERY->add_mfun(QUERY, pluginhost_aftertouch, "void", "aftertouch");
+    QUERY->add_arg(QUERY, "int", "note");
+    QUERY->add_arg(QUERY, "float", "pressure");
+    QUERY->add_arg(QUERY, "int", "channel");
+    QUERY->doc_func(QUERY, "Send a MIDI Polyphonic Aftertouch message. Channel is 1-16.");
+
+    // Version without channel (defaulting to 0)
+    QUERY->add_mfun(QUERY, pluginhost_aftertouch_default, "void", "aftertouch");
+    QUERY->add_arg(QUERY, "int", "note");
+    QUERY->add_arg(QUERY, "float", "pressure");
+    QUERY->doc_func(QUERY, "Send a MIDI Polyphonic Aftertouch message on default channel 0.");
+
+    // Version with channel
+    QUERY->add_mfun(QUERY, pluginhost_aftertouchChannel, "void", "aftertouchChannel");
+    QUERY->add_arg(QUERY, "float", "pressure");
+    QUERY->add_arg(QUERY, "int", "channel");
+    QUERY->doc_func(QUERY, "Send a MIDI Channel Aftertouch message. Channel is 1-16.");
+
+    // Version without channel (defaulting to 0)
+    QUERY->add_mfun(QUERY, pluginhost_aftertouchChannel_default, "void", "aftertouchChannel");
+    QUERY->add_arg(QUERY, "float", "pressure");
+    QUERY->doc_func(QUERY, "Send a MIDI Channel Aftertouch message on default channel 0.");
 
     QUERY->add_mfun(QUERY, pluginhost_controlChange, "void", "controlChange");
     QUERY->add_arg(QUERY, "int", "control");
@@ -1113,6 +1245,45 @@ CK_DLL_MFUN(pluginhost_getBlockSize)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     RETURN->v_int = ph_obj->getBlockSize();
 }
+
+CK_DLL_MFUN(pluginhost_latency)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj ? ph_obj->getLatency() : 0;
+}
+
+CK_DLL_MFUN(pluginhost_setBypass)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT b = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->setBypass(b);
+    RETURN->v_int = b;
+}
+
+CK_DLL_MFUN(pluginhost_getBypass)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj ? ph_obj->getBypass() : 0;
+}
+
+CK_DLL_MFUN(pluginhost_reset)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    if( ph_obj ) ph_obj->reset();
+}
+
+CK_DLL_MFUN(pluginhost_numInputs)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj ? ph_obj->getNumInputs() : 0;
+}
+
+CK_DLL_MFUN(pluginhost_numOutputs)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj ? ph_obj->getNumOutputs() : 0;
+}
+
 CK_DLL_MFUN(pluginhost_bpm)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
@@ -1226,4 +1397,65 @@ CK_DLL_MFUN(pluginhost_midiMsg)
     t_CKINT b2 = GET_NEXT_INT(ARGS);
     t_CKINT b3 = GET_NEXT_INT(ARGS);
     if( ph_obj ) ph_obj->midiMsg(b1, b2, b3);
+}
+
+CK_DLL_MFUN(pluginhost_pitchBend)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKFLOAT val = GET_NEXT_FLOAT(ARGS);
+    t_CKINT chan = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->pitchBend((float)val, chan);
+}
+
+CK_DLL_MFUN(pluginhost_pitchBend_default)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKFLOAT val = GET_NEXT_FLOAT(ARGS);
+    if( ph_obj ) ph_obj->pitchBend((float)val, 0);
+}
+
+CK_DLL_MFUN(pluginhost_aftertouch)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT note = GET_NEXT_INT(ARGS);
+    t_CKFLOAT pressure = GET_NEXT_FLOAT(ARGS);
+    t_CKINT chan = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->aftertouch(note, (float)pressure, chan);
+}
+
+CK_DLL_MFUN(pluginhost_aftertouch_default)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT note = GET_NEXT_INT(ARGS);
+    t_CKFLOAT pressure = GET_NEXT_FLOAT(ARGS);
+    if( ph_obj ) ph_obj->aftertouch(note, (float)pressure, 0);
+}
+
+CK_DLL_MFUN(pluginhost_aftertouchChannel)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKFLOAT pressure = GET_NEXT_FLOAT(ARGS);
+    t_CKINT chan = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->aftertouchChannel((float)pressure, chan);
+}
+
+CK_DLL_MFUN(pluginhost_aftertouchChannel_default)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKFLOAT pressure = GET_NEXT_FLOAT(ARGS);
+    if( ph_obj ) ph_obj->aftertouchChannel((float)pressure, 0);
+}
+
+CK_DLL_MFUN(pluginhost_setRealtime)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT b = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->setRealtime(b);
+    RETURN->v_int = b;
+}
+
+CK_DLL_MFUN(pluginhost_getRealtime)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj ? ph_obj->isRealtime() : 1;
 }
