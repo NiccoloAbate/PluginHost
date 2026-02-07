@@ -117,13 +117,46 @@ public:
 
         if (nframes == m_blockSize)
         {
-            // just wrap the channels in a juce buffer and pass it to the plugin
+            if (m_plugin)
+            {
+                // De-interleave input to m_renderBuffer
+                for(int c = 0; c < numChannels; c++)
+                {
+                    float* dest = m_renderBuffer.getWritePointer(c);
+                    for(int f = 0; f < nframes; f++)
+                        dest[f] = in[f * numChannels + c];
+                }
 
+                m_midiBuffer.clear();
+
+                // check the number of channels that a plugin actually wants (some might require sidechain inputs)
+                const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
+                // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
+                if (totalNumChannels > maxChannels)
+                    std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
+
+                m_plugin->processBlock(m_renderBuffer, m_midiBuffer);
+
+                // Interleave output from m_renderBuffer
+                for(int c = 0; c < numChannels; c++)
+                {
+                    const float* src = m_renderBuffer.getReadPointer(c);
+                    for(int f = 0; f < nframes; f++)
+                        out[f * numChannels + c] = src[f];
+                }
+            }
+            else
+            {
+                // passthrough
+                for(int i = 0; i < nframes * numChannels; i++)
+                    out[i] = in[i];
+            }
+            return;
         }
 
         for(int f = 0; f < nframes; f++)
         {
-            float inputs[2];
+            float inputs[numChannels];
             for(int c = 0; c < numChannels; c++)
                 inputs[c] = in[f * numChannels + c];
             m_inputBuffer.push(inputs, numChannels);
@@ -150,7 +183,7 @@ public:
                 }
             }
 
-            float outputs[2] = { 0.0f, 0.0f };
+            float outputs[numChannels];
             m_outputBuffer.pop(outputs, numChannels);
             
             for(int c = 0; c < numChannels; c++)
@@ -180,7 +213,7 @@ public:
 
         // Dispatch loading to the message thread
         callOnMainThread([this, file, context = createAsyncEventContext()]()
-        {            
+        {
             juce::AudioPluginFormat* format = nullptr;
             for (int i = 0; i < m_formatManager.getNumFormats(); ++i)
             {
@@ -229,7 +262,7 @@ public:
 
                     m_plugin = std::move(instance);
                     std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
-                    
+
                     m_plugin->prepareToPlay(m_srate, m_blockSize);
 
                     // request normal stereo layout
