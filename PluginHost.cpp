@@ -1,6 +1,6 @@
-/*-----------------------------------------------------------------------------
-PluginHost.cpp
------------------------------------------------------------------------------*/
+//-----------------------------------------------------------------------------
+// PluginHost.cpp
+//-----------------------------------------------------------------------------
 
 #include "chugin.h"
 #include <JuceHeader.h>
@@ -13,6 +13,7 @@ PluginHost.cpp
 #include "CircularBuffer.h"
 #include "Utilities.h"
 #include "PlayHead.h"
+#include "QWERTYMidiWindow.h"
 
 // constructor/destructor
 CK_DLL_CTOR(pluginhost_ctor);
@@ -101,37 +102,6 @@ CK_DLL_TICKF(pluginhost_tick);
 
 // data offset for internal class
 t_CKINT pluginhost_data_offset = 0;
-
-
-//-----------------------------------------------------------------------------
-// QWERTY MIDI Window
-//-----------------------------------------------------------------------------
-class QWERTYMidiWindow : public juce::DocumentWindow
-{
-public:
-
-    QWERTYMidiWindow(juce::MidiKeyboardState& state, std::function<void()> onClosed)
-        : juce::DocumentWindow("QWERTY MIDI Input", juce::Colours::darkgrey, juce::DocumentWindow::closeButton),
-          m_onClosed(onClosed)
-    {
-        auto* keyboard = new juce::MidiKeyboardComponent(state, juce::MidiKeyboardComponent::horizontalKeyboard);
-        setContentOwned(keyboard, true);
-        setUsingNativeTitleBar(true);
-        centreWithSize(400, 100);
-        setVisible(true);
-        setAlwaysOnTop(true);
-        keyboard->grabKeyboardFocus();
-    }
-
-    void closeButtonPressed() override
-    {
-        if (m_onClosed) m_onClosed();
-    }
-
-private:
-
-    std::function<void()> m_onClosed;
-};
 
 
 //-----------------------------------------------------------------------------
