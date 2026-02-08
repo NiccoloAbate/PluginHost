@@ -2,6 +2,10 @@
 
 #include <JuceHeader.h>
 
+
+//-----------------------------------------------------------------------------
+// PluginEditorWindow
+//-----------------------------------------------------------------------------
 class PluginEditorWindow : public juce::DocumentWindow
 {
 public:

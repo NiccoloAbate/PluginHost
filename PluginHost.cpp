@@ -3,7 +3,7 @@ PluginHost.cpp
 -----------------------------------------------------------------------------*/
 
 #include "chugin.h"
-#include "JuceHeader.h"
+#include <JuceHeader.h>
 
 #include <stdio.h> 
 #include <limits.h>
@@ -11,6 +11,8 @@ PluginHost.cpp
 
 #include "PluginEditorWindow.h"
 #include "CircularBuffer.h"
+#include "Utilities.h"
+#include "PlayHead.h"
 
 // constructor/destructor
 CK_DLL_CTOR(pluginhost_ctor);
@@ -99,118 +101,9 @@ CK_DLL_TICKF(pluginhost_tick);
 t_CKINT pluginhost_data_offset = 0;
 
 
-// bad practice, but is convenient and can be ok
-void callOnMessageThreadSync(std::function<void()> func)
-{
-    jassert(func);
-    
-    if (juce::MessageManager::existsAndIsCurrentThread())
-    {
-        func();
-        return;
-    }
-
-    juce::WaitableEvent event;
-    juce::MessageManager::callAsync([func, &event]()
-    {
-        func();
-        event.signal();
-    });
-    event.wait();
-}
-
-void callOnMessageThread(std::function<void()> func)
-{
-    jassert(func);
-
-    if (juce::MessageManager::existsAndIsCurrentThread())
-        func();
-    else
-        juce::MessageManager::callAsync(func);
-}
-
-
 //-----------------------------------------------------------------------------
-// PluginHost class definition
+// PluginHost
 //-----------------------------------------------------------------------------
-class PlayHead : public juce::AudioPlayHead
-{
-public:
-
-    juce::Optional<juce::AudioPlayHead::PositionInfo> getPosition() const override
-    {
-        juce::AudioPlayHead::PositionInfo info;
-        info.setBpm(bpm.load(std::memory_order_relaxed));
-        
-        juce::AudioPlayHead::TimeSignature ts;
-        ts.numerator = numerator.load(std::memory_order_relaxed);
-        ts.denominator = denominator.load(std::memory_order_relaxed);
-        info.setTimeSignature(ts);
-        
-        info.setIsPlaying(playing.load(std::memory_order_relaxed));
-        info.setIsRecording(recording.load(std::memory_order_relaxed));
-        info.setPpqPosition(ppqPosition.load(std::memory_order_relaxed));
-        info.setPpqPositionOfLastBarStart(ppqPositionOfLastBarStart.load(std::memory_order_relaxed));
-        info.setTimeInSeconds(timeInSeconds.load(std::memory_order_relaxed));
-        info.setTimeInSamples(timeInSamples.load(std::memory_order_relaxed));
-        info.setIsLooping(looping.load(std::memory_order_relaxed));
-        
-        juce::AudioPlayHead::LoopPoints lp;
-        lp.ppqStart = loopStart.load(std::memory_order_relaxed);
-        lp.ppqEnd = loopEnd.load(std::memory_order_relaxed);
-        info.setLoopPoints(lp);
-        
-        return info;
-    }
-
-    void setBpm(double b) { bpm.store(b, std::memory_order_relaxed); }
-    void setTimeSignature(int n, int d)
-    {
-        numerator.store(n, std::memory_order_relaxed); 
-        denominator.store(d, std::memory_order_relaxed); 
-    }
-    void setPpqPosition(double p) { ppqPosition.store(p, std::memory_order_relaxed); }
-    void setPlaying(bool p) { playing.store(p, std::memory_order_relaxed); }
-    void setRecording(bool r) { recording.store(r, std::memory_order_relaxed); }
-    void setTimeInSeconds(double t) { timeInSeconds.store(t, std::memory_order_relaxed); }
-    void setTimeInSamples(juce::int64 s) { timeInSamples.store(s, std::memory_order_relaxed); }
-    void setPpqPositionOfLastBarStart(double p) { ppqPositionOfLastBarStart.store(p, std::memory_order_relaxed); }
-    void setIsLooping(bool l) { looping.store(l, std::memory_order_relaxed); }
-    void setLoopPoints(double start, double end)
-    {
-        loopStart.store(start, std::memory_order_relaxed);
-        loopEnd.store(end, std::memory_order_relaxed);
-    }
-    void setLoopStart(double s) { loopStart.store(s, std::memory_order_relaxed); }
-    void setLoopEnd(double e) { loopEnd.store(e, std::memory_order_relaxed); }
-
-    double getBpm() const { return bpm.load(std::memory_order_relaxed); }
-    double getPpqPosition() const { return ppqPosition.load(std::memory_order_relaxed); }
-    bool getPlaying() const { return playing.load(std::memory_order_relaxed); }
-    bool getRecording() const { return recording.load(std::memory_order_relaxed); }
-    double getPpqPositionOfLastBarStart() const { return ppqPositionOfLastBarStart.load(std::memory_order_relaxed); }
-    juce::int64 getTimeInSamples() const { return timeInSamples.load(std::memory_order_relaxed); }
-    double getTimeInSeconds() const { return timeInSeconds.load(std::memory_order_relaxed); }
-    bool getIsLooping() const { return looping.load(std::memory_order_relaxed); }
-    double getLoopStart() const { return loopStart.load(std::memory_order_relaxed); }
-    double getLoopEnd() const { return loopEnd.load(std::memory_order_relaxed); }
-
-private:
-
-    std::atomic<double> bpm { 120.0 };
-    std::atomic<int> numerator { 4 };
-    std::atomic<int> denominator { 4 };
-    std::atomic<bool> playing { false };
-    std::atomic<bool> recording { false };
-    std::atomic<double> ppqPosition { 0.0 };
-    std::atomic<double> ppqPositionOfLastBarStart { 0.0 };
-    std::atomic<double> timeInSeconds { 0.0 };
-    std::atomic<juce::int64> timeInSamples { 0 };
-    std::atomic<bool> looping { false };
-    std::atomic<double> loopStart { 0.0 };
-    std::atomic<double> loopEnd { 0.0 };
-};
-
 class PluginHost
 {
 public:
@@ -257,13 +150,13 @@ public:
         // fine when there is no contention
         juce::SpinLock::ScopedLockType lock(m_audioLock);
 
-        // Advance playhead if playing
+        // advance playhead if playing
         constexpr bool advancePlayhead = false;
         if (advancePlayhead && m_playHead.getPlaying())
         {
             const double bpm = m_playHead.getBpm();
             const double samplesPerBeat = (m_srate * 60.0) / bpm;
-            // very susceptible to floating point errors - a tempo map is really needed for full playhead support...
+            // very susceptible to floating point errors - a tempo map is really needed for proper playhead support...
             const double ppqDelta = nframes / samplesPerBeat;
 
             m_playHead.setPpqPosition(m_playHead.getPpqPosition() + ppqDelta);
@@ -626,10 +519,7 @@ public:
             {
                 const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
                 if (elapsed > timeoutMs)
-                {
-                    std::cout << "PluginHost: waitForAsyncEvents timed out." << std::endl;
                     break;
-                }
             }
             std::this_thread::sleep_for(std::chrono::microseconds(1));
         }
@@ -833,9 +723,17 @@ private:
     juce::SpinLock m_audioLock;
 
     double m_srate;
+    // Plugin block size - since chugins are generally sample by sample, samples will have to accumulate,
+    // meaning a delay will be introduced. This is a tradeoff between delay and processing speed.
+    // Plugins are optimized for larger block sizes, generally.
+    // If the block size is equivilent to the number of frames in tick(), then the the audio
+    // will be passed directly to the plugin (bypassing the delay and accumulation).
     int m_blockSize = 16;
+    // maximum plugin block size
     static constexpr int maxBufferSize = 256;
+    // input accumulation buffer
     CircularBuffer m_inputBuffer;
+    // output buffer
     CircularBuffer m_outputBuffer;
 
     // context for tracking async events
@@ -866,11 +764,11 @@ private:
     // number of currently running asynchronous events
     std::atomic<int> m_asyncEventCount { 0 };
 
-    // if true all main thread events will be force to be "synchronous" (i.e. blocking audio process until they finish)
-    // this is simpler for user (since they don't have to manage waiting for asynchronous events) and nice for debugging
+    // If true all main thread events will be force to be "synchronous" (i.e. blocking audio process until they finish).
+    // This is simpler for user (since they don't have to manage waiting for asynchronous events) and nice for debugging
     // but it is fundamentally bad audio programming practice - it may result in unnecessary audio dropouts,
-    // and, depending on the way ChucK handles the main thread events, it may result in deadlocks
-    // seems to work in practice for now though
+    // and, depending on the way ChucK handles the main thread events, it may result in deadlocks.
+    // Deadlocks don't seem to occur in practice with ChucK though, and this greatly simplified usage.
     bool m_forceSynchronous = true;
 };
 
