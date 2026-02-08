@@ -34,6 +34,8 @@ CK_DLL_MFUN(pluginhost_programName);
 
 // other functions
 CK_DLL_MFUN(pluginhost_load);
+CK_DLL_MFUN(pluginhost_name);
+CK_DLL_MFUN(pluginhost_vendor);
 CK_DLL_MFUN(pluginhost_saveState);
 CK_DLL_MFUN(pluginhost_loadState);
 CK_DLL_MFUN(pluginhost_showEditor);
@@ -370,7 +372,17 @@ public:
         if (index < 0 || index >= params.size()) return "";
         return params[index]->getCurrentValueAsText().toStdString();
     }
-    
+
+    std::string getName() const
+    {
+        return m_plugin ? m_plugin->getName().toStdString() : "";
+    }
+
+    std::string getVendor() const
+    {
+        return m_plugin ? m_plugin->getPluginDescription().manufacturerName.toStdString() : "";
+    }
+
     void loadPlugin(const std::string& path)
     {
         juce::File file(path);
@@ -788,7 +800,7 @@ private:
     // if true all main thread events will be force to be "synchronous" (i.e. blocking audio process until they finish)
     // this is simpler for user (since they don't have to manage waiting for asynchronous events) and nice for debugging
     // but it is fundamentally bad audio programming practice - it may result in unnecessary audio dropouts,
-    // and depending on the way ChucK handles the main thread events, it may result in deadlocks
+    // and, depending on the way ChucK handles the main thread events, it may result in deadlocks
     // seems to work in practice for now though
     bool m_forceSynchronous = true;
 };
@@ -887,6 +899,12 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_load, "void", "load");
     QUERY->add_arg(QUERY, "string", "path");
     QUERY->doc_func(QUERY, "Load a plugin from a file path.");
+
+    QUERY->add_mfun(QUERY, pluginhost_name, "string", "name");
+    QUERY->doc_func(QUERY, "Get the plugin name.");
+
+    QUERY->add_mfun(QUERY, pluginhost_vendor, "string", "vendor");
+    QUERY->doc_func(QUERY, "Get the plugin vendor/manufacturer name.");
 
     QUERY->add_mfun(QUERY, pluginhost_saveState, "void", "saveState");
     QUERY->add_arg(QUERY, "string", "path");
@@ -1178,6 +1196,18 @@ CK_DLL_MFUN(pluginhost_load)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     std::string path = GET_NEXT_STRING_SAFE(ARGS);
     ph_obj->loadPlugin(path);
+}
+
+CK_DLL_MFUN(pluginhost_name)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_string = (Chuck_String *)API->object->create_string(VM, ph_obj->getName().c_str(), false);
+}
+
+CK_DLL_MFUN(pluginhost_vendor)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_string = (Chuck_String *)API->object->create_string(VM, ph_obj->getVendor().c_str(), false);
 }
 
 CK_DLL_MFUN(pluginhost_saveState)
