@@ -1126,37 +1126,31 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_allNotesOff_default, "void", "allNotesOff");
     QUERY->doc_func(QUERY, "Send a MIDI All Notes Off message on default channel 0.");
 
-    // Version with channel
     QUERY->add_mfun(QUERY, pluginhost_pitchBend, "void", "pitchBend");
     QUERY->add_arg(QUERY, "float", "value");
     QUERY->add_arg(QUERY, "int", "channel");
     QUERY->doc_func(QUERY, "Send a MIDI Pitch Bend message (-1.0 to 1.0). Channel is 1-16.");
 
-    // Version without channel (defaulting to 0)
     QUERY->add_mfun(QUERY, pluginhost_pitchBend_default, "void", "pitchBend");
     QUERY->add_arg(QUERY, "float", "value");
     QUERY->doc_func(QUERY, "Send a MIDI Pitch Bend message (-1.0 to 1.0) on default channel 0.");
 
-    // Version with channel
     QUERY->add_mfun(QUERY, pluginhost_aftertouch, "void", "aftertouch");
     QUERY->add_arg(QUERY, "int", "note");
     QUERY->add_arg(QUERY, "float", "pressure");
     QUERY->add_arg(QUERY, "int", "channel");
     QUERY->doc_func(QUERY, "Send a MIDI Polyphonic Aftertouch message. Channel is 1-16.");
 
-    // Version without channel (defaulting to 0)
     QUERY->add_mfun(QUERY, pluginhost_aftertouch_default, "void", "aftertouch");
     QUERY->add_arg(QUERY, "int", "note");
     QUERY->add_arg(QUERY, "float", "pressure");
     QUERY->doc_func(QUERY, "Send a MIDI Polyphonic Aftertouch message on default channel 0.");
 
-    // Version with channel
     QUERY->add_mfun(QUERY, pluginhost_aftertouchChannel, "void", "aftertouchChannel");
     QUERY->add_arg(QUERY, "float", "pressure");
     QUERY->add_arg(QUERY, "int", "channel");
     QUERY->doc_func(QUERY, "Send a MIDI Channel Aftertouch message. Channel is 1-16.");
 
-    // Version without channel (defaulting to 0)
     QUERY->add_mfun(QUERY, pluginhost_aftertouchChannel_default, "void", "aftertouchChannel");
     QUERY->add_arg(QUERY, "float", "pressure");
     QUERY->doc_func(QUERY, "Send a MIDI Channel Aftertouch message on default channel 0.");
