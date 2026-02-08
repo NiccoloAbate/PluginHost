@@ -2,7 +2,6 @@
 @import "PluginHost";
 
 PluginHost plugin;
-plugin.forceSynchronous(true);
 
 // Load an effect or synth
 plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");

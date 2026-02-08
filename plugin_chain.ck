@@ -4,13 +4,10 @@
 PluginHost synth;
 PluginHost fx;
 
-synth.forceSynchronous(true);
-fx.forceSynchronous(true);
-
 // Load a Synth
 synth.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
 
-// Load an Effect (Update path to a reverb, delay, or distortion)
+// Load an Effect
 fx.load("/Library/Audio/Plug-Ins/Components/EchoBoyJr.component");
 
 // Chain: Synth -> FX -> DAC

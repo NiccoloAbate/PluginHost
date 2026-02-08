@@ -11,6 +11,7 @@ plugin.blockSize(16);
 // load the plugin
 plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
 //plugin.load("/Library/Audio/Plug-Ins/VST3/Graphiti.vst3");
+//plugin.load("/Library/Audio/Plug-Ins/Components/Guitar Rig 7.component");
 
 // show the editor
 plugin.showEditor();

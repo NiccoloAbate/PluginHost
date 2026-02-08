@@ -2,7 +2,6 @@
 @import "PluginHost";
 
 PluginHost synth;
-synth.forceSynchronous(true);
 
 // Load a MIDI-controllable synth
 synth.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
@@ -33,5 +32,7 @@ fun void playExpressive()
         0.5::second => now;
     }
 } spork ~playExpressive();
+
+synth.showEditor();
 
 while( true ) 1::second => now;
