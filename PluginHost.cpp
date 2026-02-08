@@ -113,15 +113,15 @@ public:
 
     PluginHost( t_CKFLOAT fs )
     :
-      m_renderBuffer(2, 16),
-      m_inputBuffer(2, maxBufferSize + 1),
-      m_outputBuffer(2, maxBufferSize + 1)
+      m_renderBuffer(maxChannels, 16),
+      m_inputBuffer(maxChannels, maxBufferSize + 1),
+      m_outputBuffer(maxChannels, maxBufferSize + 1)
     {
         m_srate = fs;
         // default block size
         m_blockSize = 16;
         // resize render buffer to match default block size
-        m_renderBuffer.setSize(2, m_blockSize);
+        m_renderBuffer.setSize(maxChannels, m_blockSize);
         m_renderBuffer.clear();
         
         // register plugin formats
@@ -559,7 +559,7 @@ public:
         {
             juce::SpinLock::ScopedLockType lock(m_audioLock);
             m_blockSize = std::min(size, maxBufferSize);
-            m_renderBuffer.setSize(2, m_blockSize);
+            m_renderBuffer.setSize(maxChannels, m_blockSize);
 
             if (m_plugin)
                 m_plugin->prepareToPlay(m_srate, m_blockSize);
