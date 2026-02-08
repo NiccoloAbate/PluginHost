@@ -63,6 +63,17 @@ CK_DLL_MFUN(pluginhost_pos);
 CK_DLL_MFUN(pluginhost_getPos);
 CK_DLL_MFUN(pluginhost_playing);
 CK_DLL_MFUN(pluginhost_getPlaying);
+CK_DLL_MFUN(pluginhost_recording);
+CK_DLL_MFUN(pluginhost_getRecording);
+CK_DLL_MFUN(pluginhost_lastBarPos);
+CK_DLL_MFUN(pluginhost_getLastBarPos);
+CK_DLL_MFUN(pluginhost_looping);
+CK_DLL_MFUN(pluginhost_getLooping);
+CK_DLL_MFUN(pluginhost_loopPoints);
+CK_DLL_MFUN(pluginhost_loopStart);
+CK_DLL_MFUN(pluginhost_getLoopStart);
+CK_DLL_MFUN(pluginhost_loopEnd);
+CK_DLL_MFUN(pluginhost_getLoopEnd);
 
 // MIDI functions
 CK_DLL_MFUN(pluginhost_noteOn);
@@ -137,8 +148,17 @@ public:
         info.setTimeSignature(ts);
         
         info.setIsPlaying(playing.load(std::memory_order_relaxed));
+        info.setIsRecording(recording.load(std::memory_order_relaxed));
         info.setPpqPosition(ppqPosition.load(std::memory_order_relaxed));
+        info.setPpqPositionOfLastBarStart(ppqPositionOfLastBarStart.load(std::memory_order_relaxed));
         info.setTimeInSeconds(timeInSeconds.load(std::memory_order_relaxed));
+        info.setTimeInSamples(timeInSamples.load(std::memory_order_relaxed));
+        info.setIsLooping(looping.load(std::memory_order_relaxed));
+        
+        juce::AudioPlayHead::LoopPoints lp;
+        lp.ppqStart = loopStart.load(std::memory_order_relaxed);
+        lp.ppqEnd = loopEnd.load(std::memory_order_relaxed);
+        info.setLoopPoints(lp);
         
         return info;
     }
@@ -151,11 +171,29 @@ public:
     }
     void setPpqPosition(double p) { ppqPosition.store(p, std::memory_order_relaxed); }
     void setPlaying(bool p) { playing.store(p, std::memory_order_relaxed); }
+    void setRecording(bool r) { recording.store(r, std::memory_order_relaxed); }
     void setTimeInSeconds(double t) { timeInSeconds.store(t, std::memory_order_relaxed); }
+    void setTimeInSamples(juce::int64 s) { timeInSamples.store(s, std::memory_order_relaxed); }
+    void setPpqPositionOfLastBarStart(double p) { ppqPositionOfLastBarStart.store(p, std::memory_order_relaxed); }
+    void setIsLooping(bool l) { looping.store(l, std::memory_order_relaxed); }
+    void setLoopPoints(double start, double end)
+    {
+        loopStart.store(start, std::memory_order_relaxed);
+        loopEnd.store(end, std::memory_order_relaxed);
+    }
+    void setLoopStart(double s) { loopStart.store(s, std::memory_order_relaxed); }
+    void setLoopEnd(double e) { loopEnd.store(e, std::memory_order_relaxed); }
 
     double getBpm() const { return bpm.load(std::memory_order_relaxed); }
     double getPpqPosition() const { return ppqPosition.load(std::memory_order_relaxed); }
     bool getPlaying() const { return playing.load(std::memory_order_relaxed); }
+    bool getRecording() const { return recording.load(std::memory_order_relaxed); }
+    double getPpqPositionOfLastBarStart() const { return ppqPositionOfLastBarStart.load(std::memory_order_relaxed); }
+    juce::int64 getTimeInSamples() const { return timeInSamples.load(std::memory_order_relaxed); }
+    double getTimeInSeconds() const { return timeInSeconds.load(std::memory_order_relaxed); }
+    bool getIsLooping() const { return looping.load(std::memory_order_relaxed); }
+    double getLoopStart() const { return loopStart.load(std::memory_order_relaxed); }
+    double getLoopEnd() const { return loopEnd.load(std::memory_order_relaxed); }
 
 private:
 
@@ -163,8 +201,14 @@ private:
     std::atomic<int> numerator { 4 };
     std::atomic<int> denominator { 4 };
     std::atomic<bool> playing { false };
+    std::atomic<bool> recording { false };
     std::atomic<double> ppqPosition { 0.0 };
+    std::atomic<double> ppqPositionOfLastBarStart { 0.0 };
     std::atomic<double> timeInSeconds { 0.0 };
+    std::atomic<juce::int64> timeInSamples { 0 };
+    std::atomic<bool> looping { false };
+    std::atomic<double> loopStart { 0.0 };
+    std::atomic<double> loopEnd { 0.0 };
 };
 
 class PluginHost
@@ -212,6 +256,20 @@ public:
 
         // fine when there is no contention
         juce::SpinLock::ScopedLockType lock(m_audioLock);
+
+        // Advance playhead if playing
+        constexpr bool advancePlayhead = false;
+        if (advancePlayhead && m_playHead.getPlaying())
+        {
+            const double bpm = m_playHead.getBpm();
+            const double samplesPerBeat = (m_srate * 60.0) / bpm;
+            // very susceptible to floating point errors - a tempo map is really needed for full playhead support...
+            const double ppqDelta = nframes / samplesPerBeat;
+
+            m_playHead.setPpqPosition(m_playHead.getPpqPosition() + ppqDelta);
+            m_playHead.setTimeInSamples(m_playHead.getTimeInSamples() + nframes);
+            m_playHead.setTimeInSeconds(m_playHead.getTimeInSeconds() + (double)nframes / m_srate);
+        }
 
         if (nframes == m_blockSize)
         {
@@ -686,6 +744,17 @@ public:
     float getPos() { return m_playHead.getPpqPosition(); }
     int setPlaying(int p) { m_playHead.setPlaying(p); return p; }
     int getPlaying() { return m_playHead.getPlaying(); }
+    int setRecording(int r) { m_playHead.setRecording(r != 0); return r; }
+    int getRecording() { return m_playHead.getRecording() ? 1 : 0; }
+    float setLastBarPos(float p) { m_playHead.setPpqPositionOfLastBarStart(p); return p; }
+    float getLastBarPos() { return (float)m_playHead.getPpqPositionOfLastBarStart(); }
+    int setLooping(int l) { m_playHead.setIsLooping(l != 0); return l; }
+    int getLooping() { return m_playHead.getIsLooping() ? 1 : 0; }
+    void setLoopPoints(float start, float end) { m_playHead.setLoopPoints(start, end); }
+    float setLoopStart(float s) { m_playHead.setLoopStart(s); return s; }
+    float getLoopStart() { return (float)m_playHead.getLoopStart(); }
+    float setLoopEnd(float e) { m_playHead.setLoopEnd(e); return e; }
+    float getLoopEnd() { return (float)m_playHead.getLoopEnd(); }
 
     // MIDI functions
     void noteOn(int noteNumber, float velocity, int channel)
@@ -991,6 +1060,46 @@ CK_DLL_QUERY( PluginHost )
 
     QUERY->add_mfun(QUERY, pluginhost_getPlaying, "int", "playing");
     QUERY->doc_func(QUERY, "Get playing status.");
+
+    QUERY->add_mfun(QUERY, pluginhost_recording, "int", "recording");
+    QUERY->add_arg(QUERY, "int", "recording");
+    QUERY->doc_func(QUERY, "Set recording status.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getRecording, "int", "recording");
+    QUERY->doc_func(QUERY, "Get recording status.");
+
+    QUERY->add_mfun(QUERY, pluginhost_lastBarPos, "float", "lastBarPos");
+    QUERY->add_arg(QUERY, "float", "ppq");
+    QUERY->doc_func(QUERY, "Set last bar position in PPQ.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getLastBarPos, "float", "lastBarPos");
+    QUERY->doc_func(QUERY, "Get last bar position in PPQ.");
+
+    QUERY->add_mfun(QUERY, pluginhost_looping, "int", "looping");
+    QUERY->add_arg(QUERY, "int", "looping");
+    QUERY->doc_func(QUERY, "Set looping status.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getLooping, "int", "looping");
+    QUERY->doc_func(QUERY, "Get looping status.");
+
+    QUERY->add_mfun(QUERY, pluginhost_loopPoints, "void", "loopPoints");
+    QUERY->add_arg(QUERY, "float", "startPPQ");
+    QUERY->add_arg(QUERY, "float", "endPPQ");
+    QUERY->doc_func(QUERY, "Set loop start and end positions in PPQ.");
+
+    QUERY->add_mfun(QUERY, pluginhost_loopStart, "float", "loopStart");
+    QUERY->add_arg(QUERY, "float", "ppq");
+    QUERY->doc_func(QUERY, "Set loop start position in PPQ.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getLoopStart, "float", "loopStart");
+    QUERY->doc_func(QUERY, "Get loop start position in PPQ.");
+
+    QUERY->add_mfun(QUERY, pluginhost_loopEnd, "float", "loopEnd");
+    QUERY->add_arg(QUERY, "float", "ppq");
+    QUERY->doc_func(QUERY, "Set loop end position in PPQ.");
+
+    QUERY->add_mfun(QUERY, pluginhost_getLoopEnd, "float", "loopEnd");
+    QUERY->doc_func(QUERY, "Get loop end position in PPQ.");
 
     QUERY->add_mfun(QUERY, pluginhost_noteOn, "void", "noteOn");
     QUERY->add_arg(QUERY, "int", "note");
@@ -1356,6 +1465,74 @@ CK_DLL_MFUN(pluginhost_getPlaying)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     RETURN->v_int = ph_obj->getPlaying();
+}
+
+CK_DLL_MFUN(pluginhost_recording)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->setRecording(GET_NEXT_INT(ARGS));
+}
+
+CK_DLL_MFUN(pluginhost_getRecording)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getRecording();
+}
+
+CK_DLL_MFUN(pluginhost_lastBarPos)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->setLastBarPos((float)GET_NEXT_FLOAT(ARGS));
+}
+
+CK_DLL_MFUN(pluginhost_getLastBarPos)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->getLastBarPos();
+}
+
+CK_DLL_MFUN(pluginhost_looping)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->setLooping(GET_NEXT_INT(ARGS));
+}
+
+CK_DLL_MFUN(pluginhost_getLooping)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj->getLooping();
+}
+
+CK_DLL_MFUN(pluginhost_loopPoints)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKFLOAT start = GET_NEXT_FLOAT(ARGS);
+    t_CKFLOAT end = GET_NEXT_FLOAT(ARGS);
+    ph_obj->setLoopPoints((float)start, (float)end);
+}
+
+CK_DLL_MFUN(pluginhost_loopStart)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->setLoopStart((float)GET_NEXT_FLOAT(ARGS));
+}
+
+CK_DLL_MFUN(pluginhost_getLoopStart)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->getLoopStart();
+}
+
+CK_DLL_MFUN(pluginhost_loopEnd)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->setLoopEnd((float)GET_NEXT_FLOAT(ARGS));
+}
+
+CK_DLL_MFUN(pluginhost_getLoopEnd)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_float = ph_obj->getLoopEnd();
 }
 
 CK_DLL_MFUN(pluginhost_noteOn)
