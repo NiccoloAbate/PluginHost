@@ -886,7 +886,6 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
         // initialize JUCE Message Manager
         juce::MessageManager::getInstance();
         juceInitialized = true;
-        printf("JUCE MessageManager initialized on main thread.\n");
     }
 
     // pump the message loop briefly to process events
@@ -900,7 +899,6 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_quit( void * bindle )
 {
     // clean up JUCE Message Manager
     juce::MessageManager::deleteInstance();
-    printf("JUCE MessageManager deleted.\n");
     return TRUE;
 }
 
