@@ -2,11 +2,13 @@
 
 PluginHost plugin => dac;
 
-// Load a plugin with a sequencer or synced delay
-plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
-//plugin.load("/Library/Audio/Plug-Ins/Components/Guitar Rig 7.component");
+plugin.blockSize(1);
 
-120.0 => float bpm;
+// Load a plugin with a sequencer or synced delay
+//plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
+plugin.load("/Library/Audio/Plug-Ins/Components/Guitar Rig 7.component");
+
+110.0 => float bpm;
 plugin.bpm(bpm);
 plugin.timeSig(4, 4);
 plugin.playing(true);
