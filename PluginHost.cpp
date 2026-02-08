@@ -93,12 +93,44 @@ CK_DLL_MFUN(pluginhost_aftertouchChannel_default);
 CK_DLL_MFUN(pluginhost_controlChange);
 CK_DLL_MFUN(pluginhost_controlChange_default);
 CK_DLL_MFUN(pluginhost_midiMsg);
+CK_DLL_MFUN(pluginhost_addQWERTYMidiInput);
+CK_DLL_MFUN(pluginhost_removeQWERTYMidiInput);
 
 // tick function
 CK_DLL_TICKF(pluginhost_tick);
 
 // data offset for internal class
 t_CKINT pluginhost_data_offset = 0;
+
+
+//-----------------------------------------------------------------------------
+// QWERTY MIDI Window
+//-----------------------------------------------------------------------------
+class QWERTYMidiWindow : public juce::DocumentWindow
+{
+public:
+    QWERTYMidiWindow(juce::MidiKeyboardState& state, std::function<void()> onClosed)
+        : juce::DocumentWindow("QWERTY MIDI Input", juce::Colours::darkgrey, juce::DocumentWindow::closeButton),
+          m_onClosed(onClosed)
+    {
+        auto* keyboard = new juce::MidiKeyboardComponent(state, juce::MidiKeyboardComponent::horizontalKeyboard);
+        setContentOwned(keyboard, true);
+        setUsingNativeTitleBar(true);
+        centreWithSize(400, 100);
+        setVisible(true);
+        setAlwaysOnTop(true);
+        keyboard->grabKeyboardFocus();
+    }
+
+    void closeButtonPressed() override
+    {
+        if (m_onClosed) m_onClosed();
+    }
+
+private:
+
+    std::function<void()> m_onClosed;
+};
 
 
 //-----------------------------------------------------------------------------
@@ -141,6 +173,13 @@ public:
             std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
             juce::MessageManager::callAsync([plugin]() {});
         }
+
+        // destroy qwerty window if it exists
+        if (m_qwertyWindow)
+        {
+            std::shared_ptr<QWERTYMidiWindow> window = std::move(m_qwertyWindow);
+            juce::MessageManager::callAsync([window]() {});
+        }
     }
 
     void tick( SAMPLE * in, SAMPLE * out, int nframes )
@@ -173,6 +212,9 @@ public:
                 m_outputMidi.addEvents(m_inputMidi, 0, m_blockSize, 0);
                 m_inputMidi.clear();
             }
+
+            // inject keyboard MIDI
+            m_keyboardState.processNextMidiBuffer(m_outputMidi, 0, nframes, true);
 
             if (m_plugin)
             {
@@ -228,6 +270,9 @@ public:
                         m_outputMidi.addEvents(m_inputMidi, 0, m_blockSize, 0);
                         m_inputMidi.clear();
                     }
+
+                    // inject keyboard MIDI
+                    m_keyboardState.processNextMidiBuffer(m_outputMidi, 0, m_blockSize, true);
 
                     if (m_plugin)
                     {
@@ -696,6 +741,28 @@ public:
         m_inputMidi.addEvent(msg, timestamp);
     }
 
+    void addQWERTYMidiInput()
+    {
+        callOnMainThread([this, context = createAsyncEventContext()]
+        {
+            if (m_qwertyWindow)
+            {
+                m_qwertyWindow->toFront(true);
+                return;
+            }
+
+            m_qwertyWindow.reset(new QWERTYMidiWindow(m_keyboardState, [this]() { m_qwertyWindow.reset(); }));
+        });
+    }
+
+    void removeQWERTYMidiInput()
+    {
+        callOnMainThread([this, context = createAsyncEventContext()]
+        {
+            m_qwertyWindow.reset();
+        });
+    }
+
     // for now used fixed number of channels
     static constexpr int maxChannels = 8;
 
@@ -707,6 +774,10 @@ private:
     juce::KnownPluginList m_knownPluginList;
     // playhead
     PlayHead m_playHead;
+    // keyboard state
+    juce::MidiKeyboardState m_keyboardState;
+    // qwerty window
+    std::unique_ptr<QWERTYMidiWindow> m_qwertyWindow;
     // plugin instance
     std::unique_ptr<juce::AudioPluginInstance> m_plugin;
     // plugin editor window
@@ -1069,6 +1140,12 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_arg(QUERY, "int", "byte2");
     QUERY->add_arg(QUERY, "int", "byte3");
     QUERY->doc_func(QUERY, "Send a raw 3-byte MIDI message.");
+
+    QUERY->add_mfun(QUERY, pluginhost_addQWERTYMidiInput, "void", "addQWERTYMidiInput");
+    QUERY->doc_func(QUERY, "Add a QWERTY MIDI input window to route computer keyboard input to the plugin.");
+
+    QUERY->add_mfun(QUERY, pluginhost_removeQWERTYMidiInput, "void", "removeQWERTYMidiInput");
+    QUERY->doc_func(QUERY, "Remove the QWERTY MIDI input window.");
 
     // reserve a variable for internal class pointer
     pluginhost_data_offset = QUERY->add_mvar(QUERY, "int", "@ph_data", false);
@@ -1555,4 +1632,16 @@ CK_DLL_MFUN(pluginhost_getRealtime)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     RETURN->v_int = ph_obj ? ph_obj->isRealtime() : 1;
+}
+
+CK_DLL_MFUN(pluginhost_addQWERTYMidiInput)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    if( ph_obj ) ph_obj->addQWERTYMidiInput();
+}
+
+CK_DLL_MFUN(pluginhost_removeQWERTYMidiInput)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    if( ph_obj ) ph_obj->removeQWERTYMidiInput();
 }
