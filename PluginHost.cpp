@@ -737,8 +737,8 @@ public:
         m_inputMidi.addEvent(msg, timestamp);
     }
 
-    // for now used fixed number of channels and lock it to stereo
-    static constexpr int maxChannels = 2;
+    // for now used fixed number of channels
+    static constexpr int maxChannels = 8;
 
 private:
     
