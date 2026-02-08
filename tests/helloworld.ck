@@ -14,6 +14,9 @@ plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
 // show the editor
 plugin.showEditor();
 
+// add a keyboard midi input
+plugin.addQWERTYMidiInput();
+
 // wait for events (when not in synchronous mode)
 // while (plugin.asyncEventRunning())
     // 1::ms => now;

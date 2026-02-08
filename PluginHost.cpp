@@ -109,6 +109,7 @@ t_CKINT pluginhost_data_offset = 0;
 class QWERTYMidiWindow : public juce::DocumentWindow
 {
 public:
+
     QWERTYMidiWindow(juce::MidiKeyboardState& state, std::function<void()> onClosed)
         : juce::DocumentWindow("QWERTY MIDI Input", juce::Colours::darkgrey, juce::DocumentWindow::closeButton),
           m_onClosed(onClosed)
@@ -774,16 +775,16 @@ private:
     juce::KnownPluginList m_knownPluginList;
     // playhead
     PlayHead m_playHead;
-    // keyboard state
-    juce::MidiKeyboardState m_keyboardState;
-    // qwerty window
-    std::unique_ptr<QWERTYMidiWindow> m_qwertyWindow;
     // plugin instance
     std::unique_ptr<juce::AudioPluginInstance> m_plugin;
     // plugin editor window
     std::unique_ptr<PluginEditorWindow> m_editor;
     // audio render buffer
     juce::AudioBuffer<float> m_renderBuffer;
+    // keyboard state
+    juce::MidiKeyboardState m_keyboardState;
+    // qwerty window
+    std::unique_ptr<QWERTYMidiWindow> m_qwertyWindow;
     // accumulated MIDI buffer which will be used as input
     juce::MidiBuffer m_inputMidi;
     // processed MIDI buffer which will store the midi output
