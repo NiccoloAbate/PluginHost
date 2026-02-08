@@ -104,62 +104,34 @@ t_CKINT pluginhost_data_offset = 0;
 
 
 //-----------------------------------------------------------------------------
-// QWERTY Key Listener
+// QWERTY MIDI Window
 //-----------------------------------------------------------------------------
-class QWERTYKeyListener : public juce::KeyListener
+class QWERTYMidiWindow : public juce::DocumentWindow
 {
 public:
-
-    QWERTYKeyListener(juce::MidiKeyboardState& state)
-        : m_state(state)
+    QWERTYMidiWindow(juce::MidiKeyboardState& state, std::function<void()> onClosed)
+        : juce::DocumentWindow("QWERTY MIDI Input", juce::Colours::darkgrey, juce::DocumentWindow::closeButton),
+          m_onClosed(onClosed)
     {
+        auto* keyboard = new juce::MidiKeyboardComponent(state, juce::MidiKeyboardComponent::horizontalKeyboard);
+        setContentOwned(keyboard, true);
+        setUsingNativeTitleBar(true);
+        centreWithSize(400, 100);
+        setVisible(true);
+        setAlwaysOnTop(true);
+        keyboard->grabKeyboardFocus();
     }
 
-    bool keyPressed(const juce::KeyPress& key, juce::Component*) override
+    void closeButtonPressed() override
     {
-        int note = getNote(key.getKeyCode());
-        if (note != -1)
-        {
-            m_state.noteOn(1, note, 0.8f);
-            return true;
-        }
-
-        return false;
-    }
-
-    bool keyStateChanged(bool, juce::Component*) override
-    {
-        static const int keys[] = { 'A', 'W', 'S', 'E', 'D', 'F', 'T', 'G', 'Y', 'H', 'U', 'J', 'K' };
-
-        for (int k : keys)
-        {
-            if (!juce::KeyPress::isKeyCurrentlyDown(k))
-            {
-                int note = getNote(k);
-                if (note != -1) m_state.noteOff(1, note, 0.0f);
-            }
-        }
-
-        return false;
+        if (m_onClosed) m_onClosed();
     }
 
 private:
 
-    int getNote(int k)
-    {
-        switch (k)
-        {
-            case 'A': return 60; case 'W': return 61; case 'S': return 62;
-            case 'E': return 63; case 'D': return 64; case 'F': return 65;
-            case 'T': return 66; case 'G': return 67; case 'Y': return 68;
-            case 'H': return 69; case 'U': return 70; case 'J': return 71;
-            case 'K': return 72;
-            default: return -1;
-        }
-    }
-
-    juce::MidiKeyboardState& m_state;
+    std::function<void()> m_onClosed;
 };
+
 
 //-----------------------------------------------------------------------------
 // PluginHost
@@ -202,11 +174,11 @@ public:
             juce::MessageManager::callAsync([plugin]() {});
         }
 
-        // destroy qwerty listener if it exists
-        if (m_qwertyListener)
+        // destroy qwerty window if it exists
+        if (m_qwertyWindow)
         {
-            std::shared_ptr<QWERTYKeyListener> listener = std::move(m_qwertyListener);
-            juce::MessageManager::callAsync([listener]() { juce::Desktop::getInstance().removeGlobalKeyListener(listener); });
+            std::shared_ptr<QWERTYMidiWindow> window = std::move(m_qwertyWindow);
+            juce::MessageManager::callAsync([window]() {});
         }
     }
 
@@ -773,11 +745,13 @@ public:
     {
         callOnMainThread([this, context = createAsyncEventContext()]
         {
-            if (m_qwertyListener)
+            if (m_qwertyWindow)
+            {
+                m_qwertyWindow->toFront(true);
                 return;
+            }
 
-            m_qwertyListener.reset(new QWERTYKeyListener(m_keyboardState));
-            juce::Desktop::getInstance().addGlobalKeyListener(m_qwertyListener.get());
+            m_qwertyWindow.reset(new QWERTYMidiWindow(m_keyboardState, [this]() { m_qwertyWindow.reset(); }));
         });
     }
 
@@ -785,11 +759,7 @@ public:
     {
         callOnMainThread([this, context = createAsyncEventContext()]
         {
-            if (m_qwertyListener)
-            {
-                juce::Desktop::getInstance().removeGlobalKeyListener(m_qwertyListener.get());
-                m_qwertyListener.reset();
-            }
+            m_qwertyWindow.reset();
         });
     }
 
@@ -806,9 +776,8 @@ private:
     PlayHead m_playHead;
     // keyboard state
     juce::MidiKeyboardState m_keyboardState;
-    // qwerty state
-    bool m_qwertyEnabled = false;
-    bool m_qwertyKeyState[256];
+    // qwerty window
+    std::unique_ptr<QWERTYMidiWindow> m_qwertyWindow;
     // plugin instance
     std::unique_ptr<juce::AudioPluginInstance> m_plugin;
     // plugin editor window
