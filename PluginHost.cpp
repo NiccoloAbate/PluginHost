@@ -2,18 +2,13 @@
 // PluginHost.cpp
 //-----------------------------------------------------------------------------
 
-#include "chugin.h"
-#include <JuceHeader.h>
+#include "PluginHost.h"
+#include "Utilities.h"
 
-#include <stdio.h> 
+#include <stdio.h>
 #include <limits.h>
 #include <math.h>
-
-#include "PluginEditorWindow.h"
-#include "CircularBuffer.h"
-#include "Utilities.h"
-#include "PlayHead.h"
-#include "QWERTYMidiWindow.h"
+#include <iostream>
 
 //-----------------------------------------------------------------------------
 // constructor/destructor
@@ -119,741 +114,671 @@ t_CKINT pluginhost_data_offset = 0;
 
 
 //-----------------------------------------------------------------------------
-// PluginHost
+// PluginHost Implementation
 //-----------------------------------------------------------------------------
-class PluginHost
+
+//-------------------------------------------------------------------------
+// constructor/destructor
+//-------------------------------------------------------------------------
+PluginHost::PluginHost( t_CKFLOAT fs )
+:
+  m_renderBuffer(maxChannels, 16),
+  m_inputBuffer(maxChannels, maxBufferSize + 1),
+  m_outputBuffer(maxChannels, maxBufferSize + 1)
 {
-public:
-
-    //-------------------------------------------------------------------------
-    // constructor/destructor
-    //-------------------------------------------------------------------------
-    PluginHost( t_CKFLOAT fs )
-    :
-      m_renderBuffer(maxChannels, 16),
-      m_inputBuffer(maxChannels, maxBufferSize + 1),
-      m_outputBuffer(maxChannels, maxBufferSize + 1)
-    {
-        m_srate = fs;
-        // default block size
-        m_blockSize = 16;
-        // resize render buffer to match default block size
-        m_renderBuffer.setSize(maxChannels, m_blockSize);
-        m_renderBuffer.clear();
-        
-        // register plugin formats
-        m_formatManager.addDefaultFormats();
-    }
+    m_srate = fs;
+    // default block size
+    m_blockSize = 16;
+    // resize render buffer to match default block size
+    m_renderBuffer.setSize(maxChannels, m_blockSize);
+    m_renderBuffer.clear();
     
-    ~PluginHost()
-    {
-        // wait for any pending async events just in case
-        waitForAsyncEvents(100);
+    // register plugin formats
+    m_formatManager.addDefaultFormats();
+}
 
-        // delete the plugin instance on the message thread
+PluginHost::~PluginHost()
+{
+    // wait for any pending async events just in case
+    waitForAsyncEvents(100);
+
+    // delete the plugin instance on the message thread
+    if (m_plugin)
+    {
+        // detach playhead before destruction as m_playHead will be destroyed
+        // should maybe extend the lifetime of the playhead instead
+        m_plugin->setPlayHead(nullptr);
+
+        // destroy the plugin on the main thread
+        std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
+        juce::MessageManager::callAsync([plugin]() {});
+    }
+
+    // destroy qwerty window if it exists
+    if (m_qwertyWindow)
+    {
+        std::shared_ptr<QWERTYMidiWindow> window = std::move(m_qwertyWindow);
+        juce::MessageManager::callAsync([window]() {});
+    }
+}
+
+//-------------------------------------------------------------------------
+// tick
+//-------------------------------------------------------------------------
+void PluginHost::tick( SAMPLE * in, SAMPLE * out, int nframes )
+{
+    constexpr int numChannels = maxChannels;
+
+    // fine when there is no contention
+    juce::SpinLock::ScopedLockType lock(m_audioLock);
+
+    // advance playhead if playing
+    constexpr bool advancePlayhead = false;
+    if (advancePlayhead && m_playHead.getPlaying())
+    {
+        const double bpm = m_playHead.getBpm();
+        const double samplesPerBeat = (m_srate * 60.0) / bpm;
+        // very susceptible to floating point errors - a tempo map is really needed for proper playhead support...
+        const double ppqDelta = nframes / samplesPerBeat;
+
+        m_playHead.setPpqPosition(m_playHead.getPpqPosition() + ppqDelta);
+        m_playHead.setTimeInSamples(m_playHead.getTimeInSamples() + nframes);
+        m_playHead.setTimeInSeconds(m_playHead.getTimeInSeconds() + (double)nframes / m_srate);
+    }
+
+    if (nframes == m_blockSize)
+    {
+        // clear old output midi
+        m_outputMidi.clear();
+        if (m_inputMidi.getNumEvents() > 0)
+        {
+            m_outputMidi.addEvents(m_inputMidi, 0, m_blockSize, 0);
+            m_inputMidi.clear();
+        }
+
+        // inject keyboard MIDI
+        m_keyboardState.processNextMidiBuffer(m_outputMidi, 0, nframes, true);
+
         if (m_plugin)
         {
-            // detach playhead before destruction as m_playHead will be destroyed
-            // should maybe extend the lifetime of the playhead instead
-            m_plugin->setPlayHead(nullptr);
+            // de-interleave input to m_renderBuffer
+            for(int c = 0; c < numChannels; c++)
+            {
+                float* dest = m_renderBuffer.getWritePointer(c);
+                for(int f = 0; f < nframes; f++)
+                    dest[f] = in[f * numChannels + c];
+            }
 
-            // destroy the plugin on the main thread
+            // check the number of channels that a plugin actually wants (some might require sidechain inputs)
+            const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
+            // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
+            if (totalNumChannels > maxChannels)
+                std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
+
+            m_plugin->processBlock(m_renderBuffer, m_outputMidi);
+
+            // interleave output from m_renderBuffer
+            for(int c = 0; c < numChannels; c++)
+            {
+                const float* src = m_renderBuffer.getReadPointer(c);
+                for(int f = 0; f < nframes; f++)
+                    out[f * numChannels + c] = src[f];
+            }
+        }
+        else
+        {
+            // passthrough
+            for(int i = 0; i < nframes * numChannels; i++)
+                out[i] = in[i];
+        }
+        return;
+    }
+
+    for(int f = 0; f < nframes; f++)
+    {
+        float inputs[numChannels];
+        for(int c = 0; c < numChannels; c++)
+            inputs[c] = in[f * numChannels + c];
+        m_inputBuffer.push(inputs, numChannels);
+
+        // check if we have enough samples to process a block
+        if (m_inputBuffer.getAvailableSamples() >= m_blockSize)
+        {
+            if (m_inputBuffer.pop(m_renderBuffer))
+            {
+                // clear old output midi
+                m_outputMidi.clear();
+                if (m_inputMidi.getNumEvents() > 0)
+                {
+                    m_outputMidi.addEvents(m_inputMidi, 0, m_blockSize, 0);
+                    m_inputMidi.clear();
+                }
+
+                // inject keyboard MIDI
+                m_keyboardState.processNextMidiBuffer(m_outputMidi, 0, m_blockSize, true);
+
+                if (m_plugin)
+                {
+                    // check the number of channels that a plugin actually wants (some might require sidechain inputs)
+                    const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
+                    // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
+                    if (totalNumChannels > maxChannels)
+                        std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
+
+                    m_plugin->processBlock(m_renderBuffer, m_outputMidi);
+                }
+                
+                m_outputBuffer.push(m_renderBuffer);
+            }
+        }
+
+        float outputs[numChannels];
+        m_outputBuffer.pop(outputs, numChannels);
+        
+        for(int c = 0; c < numChannels; c++)
+            out[f * numChannels + c] = outputs[c];
+    }
+}
+
+//-------------------------------------------------------------------------
+// parameter accessors
+//-------------------------------------------------------------------------
+int PluginHost::getNumParams()
+{
+    if (!m_plugin) return 0;
+    return m_plugin->getParameters().size();
+}
+
+int PluginHost::getNumNonMidiParams()
+{
+    if (!m_plugin) return 0;
+    int count = 0;
+    auto& params = m_plugin->getParameters();
+    for (auto* p : params)
+    {
+        if (!p->getName(128).startsWith("MIDI CC"))
+            count++;
+    }
+    return count;
+}
+
+std::string PluginHost::getParamName(int index)
+{
+    if (!m_plugin) return "";
+    auto& params = m_plugin->getParameters();
+    if (index < 0 || index >= params.size()) return "";
+    return params[index]->getName(128).toStdString();
+}
+
+float PluginHost::getParam(int index)
+{
+    if (!m_plugin) return 0.0f;
+    auto& params = m_plugin->getParameters();
+    if (index < 0 || index >= params.size()) return 0.0f;
+    return params[index]->getValue();
+}
+
+float PluginHost::setParam(int index, float val)
+{
+    if (!m_plugin) return val;
+    auto& params = m_plugin->getParameters();
+    if (index < 0 || index >= params.size()) return val;
+    params[index]->setValue(val);
+    return val;
+}
+
+int PluginHost::findParam(const std::string& name)
+{
+    if (!m_plugin) return -1;
+    auto& params = m_plugin->getParameters();
+    for (int i = 0; i < params.size(); ++i)
+    {
+        if (params[i]->getName(128).toStdString() == name)
+            return i;
+    }
+    return -1;
+}
+
+std::string PluginHost::getParamLabel(int index)
+{
+    if (!m_plugin) return "";
+    auto& params = m_plugin->getParameters();
+    if (index < 0 || index >= params.size()) return "";
+    return params[index]->getLabel().toStdString();
+}
+
+std::string PluginHost::getParamDisplay(int index)
+{
+    if (!m_plugin) return "";
+    auto& params = m_plugin->getParameters();
+    if (index < 0 || index >= params.size()) return "";
+    return params[index]->getCurrentValueAsText().toStdString();
+}
+
+//-------------------------------------------------------------------------
+// metadata
+//-------------------------------------------------------------------------
+std::string PluginHost::getName() const
+{
+    return m_plugin ? m_plugin->getName().toStdString() : "";
+}
+
+std::string PluginHost::getVendor() const
+{
+    return m_plugin ? m_plugin->getPluginDescription().manufacturerName.toStdString() : "";
+}
+
+//-------------------------------------------------------------------------
+// load / state
+//-------------------------------------------------------------------------
+void PluginHost::loadPlugin(const std::string& path)
+{
+    juce::File file(path);
+    if (!file.exists())
+    {
+        std::cout << "PluginHost: File does not exist: " << path << std::endl;
+        return;
+    }
+
+    callOnMainThread([this, file, context = createAsyncEventContext()]
+    {
+        juce::AudioPluginFormat* format = nullptr;
+        for (int i = 0; i < m_formatManager.getNumFormats(); ++i)
+        {
+            auto* f = m_formatManager.getFormat(i);
+            std::cout << f->getName() << std::endl;
+            if (f->fileMightContainThisPluginType(file.getFullPathName()))
+            {
+                format = f;
+                break;
+            }
+        }
+
+        if (!format)
+        {
+            std::cout << "PluginHost: No format found for file " << file.getFileName() << std::endl;
+            return;
+        }
+
+        juce::OwnedArray<juce::PluginDescription> descriptions;
+        // use KnownPluginList to scan and add the file
+        m_knownPluginList.scanAndAddFile(file.getFullPathName(), false, descriptions, *format);
+        
+        if (descriptions.size() == 0)
+        {
+            std::cout << "PluginHost: No plugin descriptions found in file." << std::endl;
+            return;
+        }
+
+        std::cout << "PluginHost: Found " << descriptions.size() << " plugin descriptions. Loading the first one..." << std::endl;
+        
+        // destroy existing plugin asynchronously
+        {
             std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
             juce::MessageManager::callAsync([plugin]() {});
         }
 
-        // destroy qwerty window if it exists
-        if (m_qwertyWindow)
+        const auto callback = [this, context](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
         {
-            std::shared_ptr<QWERTYMidiWindow> window = std::move(m_qwertyWindow);
-            juce::MessageManager::callAsync([window]() {});
-        }
-    }
+            if (!instance)
+            {
+                std::cout << "PluginHost: Failed to load plugin: " << error << std::endl;
+                return;
+            }
 
-    //-------------------------------------------------------------------------
-    // tick
-    //-------------------------------------------------------------------------
-    void tick( SAMPLE * in, SAMPLE * out, int nframes )
+            {
+                instance->prepareToPlay(m_srate, m_blockSize);
+                instance->setPlayHead(&m_playHead);
+
+                // request normal stereo layout
+                juce::AudioProcessor::BusesLayout normalLayout;
+                normalLayout.inputBuses.add(juce::AudioChannelSet::stereo());
+                normalLayout.outputBuses.add(juce::AudioChannelSet::stereo());
+                
+                if (instance->checkBusesLayoutSupported(normalLayout))
+                    instance->setBusesLayout(normalLayout);
+                else
+                {
+                    // the plugin doesn't like the normal layout it is going to force some other layout
+                }
+
+                m_plugin = std::move(instance);
+            }
+            std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
+
+            constexpr bool displayEditor = false;
+            if (displayEditor)
+                showEditor();
+        };
+
+        // create the plugin instance asynchronously
+        format->createPluginInstanceAsync(*descriptions[0], m_srate, m_blockSize, callback);
+    });
+
+    // if we are forcing synchronicity, wait for the plugin to load
+    if (m_forceSynchronous)
+        waitForAsyncEvents();
+}
+
+void PluginHost::showEditor()
+{
+    callOnMainThread([this, context = createAsyncEventContext()]
     {
-        constexpr int numChannels = maxChannels;
-
-        // fine when there is no contention
-        juce::SpinLock::ScopedLockType lock(m_audioLock);
-
-        // advance playhead if playing
-        constexpr bool advancePlayhead = false;
-        if (advancePlayhead && m_playHead.getPlaying())
+        // if the editor already exists, just bring it to the front
+        if (m_editor)
         {
-            const double bpm = m_playHead.getBpm();
-            const double samplesPerBeat = (m_srate * 60.0) / bpm;
-            // very susceptible to floating point errors - a tempo map is really needed for proper playhead support...
-            const double ppqDelta = nframes / samplesPerBeat;
-
-            m_playHead.setPpqPosition(m_playHead.getPpqPosition() + ppqDelta);
-            m_playHead.setTimeInSamples(m_playHead.getTimeInSamples() + nframes);
-            m_playHead.setTimeInSeconds(m_playHead.getTimeInSeconds() + (double)nframes / m_srate);
+            m_editor->toFront(true);
+            return;
         }
-
-        if (nframes == m_blockSize)
+        
+        // make sure that the plugin has an editor
+        if (!m_plugin->hasEditor())
+            return;
+        
+        // create the editor
+        if (auto* editor = m_plugin->createEditorIfNeeded())
         {
-            // clear old output midi
-            m_outputMidi.clear();
-            if (m_inputMidi.getNumEvents() > 0)
-            {
-                m_outputMidi.addEvents(m_inputMidi, 0, m_blockSize, 0);
-                m_inputMidi.clear();
-            }
+            // wrap the editor in a window
+            auto* window = new PluginEditorWindow(editor);
+            window->addToDesktop();
+            window->toFront(true);
+            window->onClose = [this]() { m_editor.reset(); };
+            m_editor.reset(window);
+        }
+    });
+}
 
-            // inject keyboard MIDI
-            m_keyboardState.processNextMidiBuffer(m_outputMidi, 0, nframes, true);
+void PluginHost::hideEditor()
+{
+    callOnMainThread([this, context = createAsyncEventContext()] { m_editor.reset(); });
+}
 
-            if (m_plugin)
-            {
-                // de-interleave input to m_renderBuffer
-                for(int c = 0; c < numChannels; c++)
-                {
-                    float* dest = m_renderBuffer.getWritePointer(c);
-                    for(int f = 0; f < nframes; f++)
-                        dest[f] = in[f * numChannels + c];
-                }
-
-                // check the number of channels that a plugin actually wants (some might require sidechain inputs)
-                const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
-                // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
-                if (totalNumChannels > maxChannels)
-                    std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
-
-                m_plugin->processBlock(m_renderBuffer, m_outputMidi);
-
-                // interleave output from m_renderBuffer
-                for(int c = 0; c < numChannels; c++)
-                {
-                    const float* src = m_renderBuffer.getReadPointer(c);
-                    for(int f = 0; f < nframes; f++)
-                        out[f * numChannels + c] = src[f];
-                }
-            }
-            else
-            {
-                // passthrough
-                for(int i = 0; i < nframes * numChannels; i++)
-                    out[i] = in[i];
-            }
+void PluginHost::saveState(const std::string& path)
+{
+    callOnMainThread([this, path, context = createAsyncEventContext()]
+    {
+        if (!m_plugin)
+        {
+            std::cout << "PluginHost: No plugin loaded." << std::endl;
             return;
         }
 
-        for(int f = 0; f < nframes; f++)
-        {
-            float inputs[numChannels];
-            for(int c = 0; c < numChannels; c++)
-                inputs[c] = in[f * numChannels + c];
-            m_inputBuffer.push(inputs, numChannels);
+        juce::MemoryBlock destData;
+        m_plugin->getStateInformation(destData);
 
-            // check if we have enough samples to process a block
-            if (m_inputBuffer.getAvailableSamples() >= m_blockSize)
-            {
-                if (m_inputBuffer.pop(m_renderBuffer))
-                {
-                    // clear old output midi
-                    m_outputMidi.clear();
-                    if (m_inputMidi.getNumEvents() > 0)
-                    {
-                        m_outputMidi.addEvents(m_inputMidi, 0, m_blockSize, 0);
-                        m_inputMidi.clear();
-                    }
-
-                    // inject keyboard MIDI
-                    m_keyboardState.processNextMidiBuffer(m_outputMidi, 0, m_blockSize, true);
-
-                    if (m_plugin)
-                    {
-                        // check the number of channels that a plugin actually wants (some might require sidechain inputs)
-                        const int totalNumChannels = std::max(m_plugin->getTotalNumInputChannels(), m_plugin->getTotalNumOutputChannels());
-                        // currently we don't do anything to accomodate this, but we eventually will make sure plugins get the channels they want
-                        if (totalNumChannels > maxChannels)
-                            std::cout << "PluginHost: Channel mismatch, this might cause issues..." << std::endl;
-
-                        m_plugin->processBlock(m_renderBuffer, m_outputMidi);
-                    }
-                    
-                    m_outputBuffer.push(m_renderBuffer);
-                }
-            }
-
-            float outputs[numChannels];
-            m_outputBuffer.pop(outputs, numChannels);
-            
-            for(int c = 0; c < numChannels; c++)
-                out[f * numChannels + c] = outputs[c];
-        }
-    }
-
-    //-------------------------------------------------------------------------
-    // parameter accessors
-    //-------------------------------------------------------------------------
-    int getNumParams()
-    {
-        if (!m_plugin) return 0;
-        return m_plugin->getParameters().size();
-    }
-
-    int getNumNonMidiParams()
-    {
-        if (!m_plugin) return 0;
-        int count = 0;
-        auto& params = m_plugin->getParameters();
-        for (auto* p : params)
-        {
-            if (!p->getName(128).startsWith("MIDI CC"))
-                count++;
-        }
-        return count;
-    }
-
-    std::string getParamName(int index)
-    {
-        if (!m_plugin) return "";
-        auto& params = m_plugin->getParameters();
-        if (index < 0 || index >= params.size()) return "";
-        return params[index]->getName(128).toStdString();
-    }
-
-    float getParam(int index)
-    {
-        if (!m_plugin) return 0.0f;
-        auto& params = m_plugin->getParameters();
-        if (index < 0 || index >= params.size()) return 0.0f;
-        return params[index]->getValue();
-    }
-
-    float setParam(int index, float val)
-    {
-        if (!m_plugin) return val;
-        auto& params = m_plugin->getParameters();
-        if (index < 0 || index >= params.size()) return val;
-        params[index]->setValue(val);
-        return val;
-    }
-
-    int findParam(const std::string& name)
-    {
-        if (!m_plugin) return -1;
-        auto& params = m_plugin->getParameters();
-        for (int i = 0; i < params.size(); ++i)
-        {
-            if (params[i]->getName(128).toStdString() == name)
-                return i;
-        }
-        return -1;
-    }
-
-    std::string getParamLabel(int index)
-    {
-        if (!m_plugin) return "";
-        auto& params = m_plugin->getParameters();
-        if (index < 0 || index >= params.size()) return "";
-        return params[index]->getLabel().toStdString();
-    }
-
-    std::string getParamDisplay(int index)
-    {
-        if (!m_plugin) return "";
-        auto& params = m_plugin->getParameters();
-        if (index < 0 || index >= params.size()) return "";
-        return params[index]->getCurrentValueAsText().toStdString();
-    }
-
-    //-------------------------------------------------------------------------
-    // metadata
-    //-------------------------------------------------------------------------
-    std::string getName() const
-    {
-        return m_plugin ? m_plugin->getName().toStdString() : "";
-    }
-
-    std::string getVendor() const
-    {
-        return m_plugin ? m_plugin->getPluginDescription().manufacturerName.toStdString() : "";
-    }
-
-    //-------------------------------------------------------------------------
-    // load / state
-    //-------------------------------------------------------------------------
-    void loadPlugin(const std::string& path)
-    {
         juce::File file(path);
-        if (!file.exists())
+        if (file.replaceWithData(destData.getData(), destData.getSize()))
+            std::cout << "PluginHost: State saved to " << path << std::endl;
+        else
+            std::cout << "PluginHost: Failed to save state to " << path << std::endl;
+    });
+}
+
+void PluginHost::loadState(const std::string& path)
+{
+    callOnMainThread([this, path, context = createAsyncEventContext()]
+    {
+        if (!m_plugin)
+        {
+            std::cout << "PluginHost: No plugin loaded." << std::endl;
+            return;
+        }
+
+        juce::File file(path);
+        if (!file.existsAsFile())
         {
             std::cout << "PluginHost: File does not exist: " << path << std::endl;
             return;
         }
 
-        callOnMainThread([this, file, context = createAsyncEventContext()]
+        juce::MemoryBlock destData;
+        if (file.loadFileAsData(destData))
         {
-            juce::AudioPluginFormat* format = nullptr;
-            for (int i = 0; i < m_formatManager.getNumFormats(); ++i)
-            {
-                auto* f = m_formatManager.getFormat(i);
-                std::cout << f->getName() << std::endl;
-                if (f->fileMightContainThisPluginType(file.getFullPathName()))
-                {
-                    format = f;
-                    break;
-                }
-            }
-
-            if (!format)
-            {
-                std::cout << "PluginHost: No format found for file " << file.getFileName() << std::endl;
-                return;
-            }
-
-            juce::OwnedArray<juce::PluginDescription> descriptions;
-            // use KnownPluginList to scan and add the file
-            m_knownPluginList.scanAndAddFile(file.getFullPathName(), false, descriptions, *format);
-            
-            if (descriptions.size() == 0)
-            {
-                std::cout << "PluginHost: No plugin descriptions found in file." << std::endl;
-                return;
-            }
-
-            std::cout << "PluginHost: Found " << descriptions.size() << " plugin descriptions. Loading the first one..." << std::endl;
-            
-            // destroy existing plugin asynchronously
-            {
-                std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
-                juce::MessageManager::callAsync([plugin]() {});
-            }
-
-            const auto callback = [this, context](std::unique_ptr<juce::AudioPluginInstance> instance, const juce::String& error)
-            {
-                if (!instance)
-                {
-                    std::cout << "PluginHost: Failed to load plugin: " << error << std::endl;
-                    return;
-                }
-
-                {
-                    instance->prepareToPlay(m_srate, m_blockSize);
-                    instance->setPlayHead(&m_playHead);
-
-                    // request normal stereo layout
-                    juce::AudioProcessor::BusesLayout normalLayout;
-                    normalLayout.inputBuses.add(juce::AudioChannelSet::stereo());
-                    normalLayout.outputBuses.add(juce::AudioChannelSet::stereo());
-                    
-                    if (instance->checkBusesLayoutSupported(normalLayout))
-                        instance->setBusesLayout(normalLayout);
-                    else
-                    {
-                        // the plugin doesn't like the normal layout it is going to force some other layout
-                    }
-
-                    m_plugin = std::move(instance);
-                }
-                std::cout << "PluginHost: Successfully loaded: " << m_plugin->getName() << std::endl;
-
-                constexpr bool displayEditor = false;
-                if (displayEditor)
-                    showEditor();
-            };
-
-            // create the plugin instance asynchronously
-            format->createPluginInstanceAsync(*descriptions[0], m_srate, m_blockSize, callback);
-        });
-
-        // if we are forcing synchronicity, wait for the plugin to load
-        if (m_forceSynchronous)
-            waitForAsyncEvents();
-    }
-
-    void showEditor()
-    {
-        callOnMainThread([this, context = createAsyncEventContext()]
-        {
-            // if the editor already exists, just bring it to the front
-            if (m_editor)
-            {
-                m_editor->toFront(true);
-                return;
-            }
-            
-            // make sure that the plugin has an editor
-            if (!m_plugin->hasEditor())
-                return;
-            
-            // create the editor
-            if (auto* editor = m_plugin->createEditorIfNeeded())
-            {
-                // wrap the editor in a window
-                auto* window = new PluginEditorWindow(editor);
-                window->addToDesktop();
-                window->toFront(true);
-                window->onClose = [this]() { m_editor.reset(); };
-                m_editor.reset(window);
-            }
-        });
-    }
-
-    void hideEditor()
-    {
-        callOnMainThread([this, context = createAsyncEventContext()] { m_editor.reset(); });
-    }
-
-    void saveState(const std::string& path)
-    {
-        callOnMainThread([this, path, context = createAsyncEventContext()]
-        {
-            if (!m_plugin)
-            {
-                std::cout << "PluginHost: No plugin loaded." << std::endl;
-                return;
-            }
-
-            juce::MemoryBlock destData;
-            m_plugin->getStateInformation(destData);
-
-            juce::File file(path);
-            if (file.replaceWithData(destData.getData(), destData.getSize()))
-                std::cout << "PluginHost: State saved to " << path << std::endl;
-            else
-                std::cout << "PluginHost: Failed to save state to " << path << std::endl;
-        });
-    }
-
-    void loadState(const std::string& path)
-    {
-        callOnMainThread([this, path, context = createAsyncEventContext()]
-        {
-            if (!m_plugin)
-            {
-                std::cout << "PluginHost: No plugin loaded." << std::endl;
-                return;
-            }
-
-            juce::File file(path);
-            if (!file.existsAsFile())
-            {
-                std::cout << "PluginHost: File does not exist: " << path << std::endl;
-                return;
-            }
-
-            juce::MemoryBlock destData;
-            if (file.loadFileAsData(destData))
-            {
-                m_plugin->setStateInformation(destData.getData(), (int)destData.getSize());
-                std::cout << "PluginHost: State loaded from " << path << std::endl;
-            }
-            else
-                std::cout << "PluginHost: Failed to load state from " << path << std::endl;
-        });
-    }
-
-    //-------------------------------------------------------------------------
-    // async / sync
-    //-------------------------------------------------------------------------
-    bool asyncEventRunning() const
-    {
-        return m_asyncEventCount > 0;
-    }
-
-    void waitForAsyncEvents(int timeoutMs = -1) const
-    {
-        const auto start = std::chrono::steady_clock::now();
-        while (m_asyncEventCount > 0)
-        {
-            if (timeoutMs >= 0)
-            {
-                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-                if (elapsed > timeoutMs)
-                    break;
-            }
-            std::this_thread::sleep_for(std::chrono::microseconds(1));
+            m_plugin->setStateInformation(destData.getData(), (int)destData.getSize());
+            std::cout << "PluginHost: State loaded from " << path << std::endl;
         }
-    }
-
-    void setForceSynchronous(bool b)
-    {
-        m_forceSynchronous = b;
-    }
-
-    bool getForceSynchronous() const
-    {
-        return m_forceSynchronous;
-    }
-
-    //-------------------------------------------------------------------------
-    // processing config
-    //-------------------------------------------------------------------------
-    void setBlockSize(int size)
-    {
-        if (size <= 0) return;
-
-        callOnMainThread([this, size, context = createAsyncEventContext()]
-        {
-            juce::SpinLock::ScopedLockType lock(m_audioLock);
-            m_blockSize = std::min(size, maxBufferSize);
-            m_renderBuffer.setSize(maxChannels, m_blockSize);
-
-            if (m_plugin)
-                m_plugin->prepareToPlay(m_srate, m_blockSize);
-        });
-    }
-
-    int getBlockSize() const
-    {
-        return m_blockSize;
-    }
-
-    int getLatency() const
-    {
-        return m_plugin ? m_plugin->getLatencySamples() : 0;
-    }
-
-    void setBypass(bool b)
-    {
-        if (m_plugin) m_plugin->suspendProcessing(b);
-    }
-
-    bool getBypass() const
-    {
-        return m_plugin ? m_plugin->isSuspended() : false;
-    }
-
-    void reset()
-    {
-        if (m_plugin) m_plugin->reset();
-    }
-
-    int getNumInputs() const
-    {
-        return m_plugin ? m_plugin->getTotalNumInputChannels() : 0;
-    }
-
-    int getNumOutputs() const
-    {
-        return m_plugin ? m_plugin->getTotalNumOutputChannels() : 0;
-    }
-
-    void setRealtime(bool b)
-    {
-        if (m_plugin) m_plugin->setNonRealtime(!b);
-    }
-
-    bool isRealtime() const
-    {
-        return m_plugin ? !m_plugin->isNonRealtime() : false;
-    }
-
-    //-------------------------------------------------------------------------
-    // program functions
-    //-------------------------------------------------------------------------
-    int getNumPrograms()
-    {
-        if (!m_plugin) return 0;
-        return m_plugin->getNumPrograms();
-    }
-
-    int getCurrentProgram()
-    {
-        if (!m_plugin) return 0;
-        return m_plugin->getCurrentProgram();
-    }
-
-    void setCurrentProgram(int index)
-    {
-        if (!m_plugin) return;
-        if (index < 0 || index >= m_plugin->getNumPrograms()) return;
-
-        callOnMainThread([this, index, context = createAsyncEventContext()]
-        {
-            m_plugin->setCurrentProgram(index);
-        });
-    }
-
-    std::string getProgramName(int index)
-    {
-        if (!m_plugin) return "";
-        if (index < 0 || index >= m_plugin->getNumPrograms()) return "";
-        return m_plugin->getProgramName(index).toStdString();
-    }
-
-    //-------------------------------------------------------------------------
-    // playHead accessors
-    //-------------------------------------------------------------------------
-    float setBpm(float b) { m_playHead.setBpm(b); return b; }
-    float getBpm() { return m_playHead.getBpm(); }
-    void setTimeSig(int n, int d) { m_playHead.setTimeSignature(n, d); }
-    float setPos(float p) { m_playHead.setPpqPosition(p); return p; }
-    float getPos() { return m_playHead.getPpqPosition(); }
-    int setPlaying(int p) { m_playHead.setPlaying(p); return p; }
-    int getPlaying() { return m_playHead.getPlaying(); }
-    int setRecording(int r) { m_playHead.setRecording(r != 0); return r; }
-    int getRecording() { return m_playHead.getRecording() ? 1 : 0; }
-    float setLastBarPos(float p) { m_playHead.setPpqPositionOfLastBarStart(p); return p; }
-    float getLastBarPos() { return (float)m_playHead.getPpqPositionOfLastBarStart(); }
-    int setLooping(int l) { m_playHead.setIsLooping(l != 0); return l; }
-    int getLooping() { return m_playHead.getIsLooping() ? 1 : 0; }
-    void setLoopPoints(float start, float end) { m_playHead.setLoopPoints(start, end); }
-    float setLoopStart(float s) { m_playHead.setLoopStart(s); return s; }
-    float getLoopStart() { return (float)m_playHead.getLoopStart(); }
-    float setLoopEnd(float e) { m_playHead.setLoopEnd(e); return e; }
-    float getLoopEnd() { return (float)m_playHead.getLoopEnd(); }
-
-    //-------------------------------------------------------------------------
-    // MIDI functions
-    //-------------------------------------------------------------------------
-    void noteOn(int noteNumber, float velocity, int channel)
-    {
-        addMidiEvent(juce::MidiMessage::noteOn(channel, (juce::uint8)noteNumber, velocity));
-    }
-
-    void noteOff(int noteNumber, int channel)
-    {
-        addMidiEvent(juce::MidiMessage::noteOff(channel, (juce::uint8)noteNumber, (juce::uint8)0));
-    }
-
-    void allNotesOff(int channel)
-    {
-        addMidiEvent(juce::MidiMessage::allNotesOff(channel));
-    }
-
-    void pitchBend(float value, int channel)
-    {
-        int wheelValue = (int)((value + 1.0f) * 8191.5f);
-        wheelValue = std::max(0, std::min(16383, wheelValue));
-        addMidiEvent(juce::MidiMessage::pitchWheel(channel, wheelValue));
-    }
-
-    void aftertouch(int noteNumber, float pressure, int channel)
-    {
-        addMidiEvent(juce::MidiMessage::aftertouchChange(channel, (juce::uint8)noteNumber, (juce::uint8)(pressure * 127.0f)));
-    }
-
-    void aftertouchChannel(float pressure, int channel)
-    {
-        addMidiEvent(juce::MidiMessage::channelPressureChange(channel, (juce::uint8)(pressure * 127.0f)));
-    }
-
-    void controlChange(int controlNumber, int value, int channel)
-    {
-        addMidiEvent(juce::MidiMessage::controllerEvent(channel, controlNumber, (juce::uint8)value));
-    }
-
-    void midiMsg(int byte1, int byte2, int byte3)
-    {
-        addMidiEvent(juce::MidiMessage(byte1, byte2, byte3));
-    }
-
-    void addMidiEvent(const juce::MidiMessage& msg)
-    {
-        int timestamp = m_inputBuffer.getAvailableSamples();
-        timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
-        m_inputMidi.addEvent(msg, timestamp);
-    }
-
-    void addQWERTYMidiInput()
-    {
-        callOnMainThread([this, context = createAsyncEventContext()]
-        {
-            if (m_qwertyWindow)
-            {
-                m_qwertyWindow->toFront(true);
-                return;
-            }
-
-            m_qwertyWindow.reset(new QWERTYMidiWindow(m_keyboardState, [this]() { m_qwertyWindow.reset(); }));
-        });
-    }
-
-    void removeQWERTYMidiInput()
-    {
-        callOnMainThread([this, context = createAsyncEventContext()]
-        {
-            m_qwertyWindow.reset();
-        });
-    }
-
-    // for now used fixed number of channels
-    static constexpr int maxChannels = 8;
-
-private:
-    
-    // plugin format manager
-    juce::AudioPluginFormatManager m_formatManager;
-    // plugin list
-    juce::KnownPluginList m_knownPluginList;
-    // playhead
-    PlayHead m_playHead;
-    // plugin instance
-    std::unique_ptr<juce::AudioPluginInstance> m_plugin;
-    // plugin editor window
-    std::unique_ptr<PluginEditorWindow> m_editor;
-    // audio render buffer
-    juce::AudioBuffer<float> m_renderBuffer;
-    // keyboard state
-    juce::MidiKeyboardState m_keyboardState;
-    // qwerty window
-    std::unique_ptr<QWERTYMidiWindow> m_qwertyWindow;
-    // accumulated MIDI buffer which will be used as input
-    juce::MidiBuffer m_inputMidi;
-    // processed MIDI buffer which will store the midi output
-    juce::MidiBuffer m_outputMidi;
-
-    // brute force synchronization - use sparingly
-    // currently used for protecting critical audio processing code, such as resizing buffers
-    juce::SpinLock m_audioLock;
-
-    double m_srate;
-    // Plugin block size - since chugins are generally sample by sample, samples will have to accumulate,
-    // meaning a delay will be introduced. This is a tradeoff between delay and processing speed.
-    // Plugins are optimized for larger block sizes, generally.
-    // If the block size is equivilent to the number of frames in tick(), then the the audio
-    // will be passed directly to the plugin (bypassing the delay and accumulation).
-    int m_blockSize = 16;
-    // maximum plugin block size
-    static constexpr int maxBufferSize = 256;
-    // input accumulation buffer
-    CircularBuffer m_inputBuffer;
-    // output buffer
-    CircularBuffer m_outputBuffer;
-
-    // context for tracking async events
-    struct AsyncEventContext
-    {
-        AsyncEventContext(PluginHost& host) : m_host(&host) { m_host->m_asyncEventCount.fetch_add(1); }
-        ~AsyncEventContext() { if (m_host) m_host->m_asyncEventCount.fetch_sub(1); }
-
-        AsyncEventContext(const AsyncEventContext&) = delete;
-        AsyncEventContext& operator=(const AsyncEventContext&) = delete;
-        AsyncEventContext(AsyncEventContext&& other) = delete;
-        AsyncEventContext& operator=(AsyncEventContext&& other) = delete;
-
-        PluginHost* m_host = nullptr;
-    };
-    // create an async event context
-    std::shared_ptr<AsyncEventContext> createAsyncEventContext() { return std::make_shared<AsyncEventContext>(*this); }
-
-    // call a function on the main thread, either synchonously or asynchronously
-    void callOnMainThread(std::function<void()> func)
-    {
-        if (m_forceSynchronous)
-            callOnMessageThreadSync(func);
         else
-            callOnMessageThread(func);
+            std::cout << "PluginHost: Failed to load state from " << path << std::endl;
+    });
+}
+
+//-------------------------------------------------------------------------
+// async / sync
+//-------------------------------------------------------------------------
+bool PluginHost::asyncEventRunning() const
+{
+    return m_asyncEventCount > 0;
+}
+
+void PluginHost::waitForAsyncEvents(int timeoutMs) const
+{
+    const auto start = std::chrono::steady_clock::now();
+    while (m_asyncEventCount > 0)
+    {
+        if (timeoutMs >= 0)
+        {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+            if (elapsed > timeoutMs)
+                break;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
+}
 
-    // number of currently running asynchronous events
-    std::atomic<int> m_asyncEventCount { 0 };
+void PluginHost::setForceSynchronous(bool b)
+{
+    m_forceSynchronous = b;
+}
 
-    // If true all main thread events will be force to be "synchronous" (i.e. blocking audio process until they finish).
-    // This is simpler for user (since they don't have to manage waiting for asynchronous events) and nice for debugging
-    // but it is fundamentally bad audio programming practice - it may result in unnecessary audio dropouts,
-    // and, depending on the way ChucK handles the main thread events, it may result in deadlocks.
-    // Deadlocks don't seem to occur in practice with ChucK though, and this greatly simplified usage.
-    bool m_forceSynchronous = true;
-};
+bool PluginHost::getForceSynchronous() const
+{
+    return m_forceSynchronous;
+}
+
+//-------------------------------------------------------------------------
+// processing config
+//-------------------------------------------------------------------------
+void PluginHost::setBlockSize(int size)
+{
+    if (size <= 0) return;
+
+    callOnMainThread([this, size, context = createAsyncEventContext()]
+    {
+        juce::SpinLock::ScopedLockType lock(m_audioLock);
+        m_blockSize = std::min(size, maxBufferSize);
+        m_renderBuffer.setSize(maxChannels, m_blockSize);
+
+        if (m_plugin)
+            m_plugin->prepareToPlay(m_srate, m_blockSize);
+    });
+}
+
+int PluginHost::getBlockSize() const
+{
+    return m_blockSize;
+}
+
+int PluginHost::getLatency() const
+{
+    return m_plugin ? m_plugin->getLatencySamples() : 0;
+}
+
+void PluginHost::setBypass(bool b)
+{
+    if (m_plugin) m_plugin->suspendProcessing(b);
+}
+
+bool PluginHost::getBypass() const
+{
+    return m_plugin ? m_plugin->isSuspended() : false;
+}
+
+void PluginHost::reset()
+{
+    if (m_plugin) m_plugin->reset();
+}
+
+int PluginHost::getNumInputs() const
+{
+    return m_plugin ? m_plugin->getTotalNumInputChannels() : 0;
+}
+
+int PluginHost::getNumOutputs() const
+{
+    return m_plugin ? m_plugin->getTotalNumOutputChannels() : 0;
+}
+
+void PluginHost::setRealtime(bool b)
+{
+    if (m_plugin) m_plugin->setNonRealtime(!b);
+}
+
+bool PluginHost::isRealtime() const
+{
+    return m_plugin ? !m_plugin->isNonRealtime() : false;
+}
+
+//-------------------------------------------------------------------------
+// program functions
+//-------------------------------------------------------------------------
+int PluginHost::getNumPrograms()
+{
+    if (!m_plugin) return 0;
+    return m_plugin->getNumPrograms();
+}
+
+int PluginHost::getCurrentProgram()
+{
+    if (!m_plugin) return 0;
+    return m_plugin->getCurrentProgram();
+}
+
+void PluginHost::setCurrentProgram(int index)
+{
+    if (!m_plugin) return;
+    if (index < 0 || index >= m_plugin->getNumPrograms()) return;
+
+    callOnMainThread([this, index, context = createAsyncEventContext()]
+    {
+        m_plugin->setCurrentProgram(index);
+    });
+}
+
+std::string PluginHost::getProgramName(int index)
+{
+    if (!m_plugin) return "";
+    if (index < 0 || index >= m_plugin->getNumPrograms()) return "";
+    return m_plugin->getProgramName(index).toStdString();
+}
+
+//-------------------------------------------------------------------------
+// playHead accessors
+//-------------------------------------------------------------------------
+float PluginHost::setBpm(float b) { m_playHead.setBpm(b); return b; }
+float PluginHost::getBpm() { return m_playHead.getBpm(); }
+void PluginHost::setTimeSig(int n, int d) { m_playHead.setTimeSignature(n, d); }
+float PluginHost::setPos(float p) { m_playHead.setPpqPosition(p); return p; }
+float PluginHost::getPos() { return m_playHead.getPpqPosition(); }
+int PluginHost::setPlaying(int p) { m_playHead.setPlaying(p); return p; }
+int PluginHost::getPlaying() { return m_playHead.getPlaying(); }
+int PluginHost::setRecording(int r) { m_playHead.setRecording(r != 0); return r; }
+int PluginHost::getRecording() { return m_playHead.getRecording() ? 1 : 0; }
+float PluginHost::setLastBarPos(float p) { m_playHead.setPpqPositionOfLastBarStart(p); return p; }
+float PluginHost::getLastBarPos() { return (float)m_playHead.getPpqPositionOfLastBarStart(); }
+int PluginHost::setLooping(int l) { m_playHead.setIsLooping(l != 0); return l; }
+int PluginHost::getLooping() { return m_playHead.getIsLooping() ? 1 : 0; }
+void PluginHost::setLoopPoints(float start, float end) { m_playHead.setLoopPoints(start, end); }
+float PluginHost::setLoopStart(float s) { m_playHead.setLoopStart(s); return s; }
+float PluginHost::getLoopStart() { return (float)m_playHead.getLoopStart(); }
+float PluginHost::setLoopEnd(float e) { m_playHead.setLoopEnd(e); return e; }
+float PluginHost::getLoopEnd() { return (float)m_playHead.getLoopEnd(); }
+
+//-------------------------------------------------------------------------
+// MIDI functions
+//-------------------------------------------------------------------------
+void PluginHost::noteOn(int noteNumber, float velocity, int channel)
+{
+    addMidiEvent(juce::MidiMessage::noteOn(channel, (juce::uint8)noteNumber, velocity));
+}
+
+void PluginHost::noteOff(int noteNumber, int channel)
+{
+    addMidiEvent(juce::MidiMessage::noteOff(channel, (juce::uint8)noteNumber, (juce::uint8)0));
+}
+
+void PluginHost::allNotesOff(int channel)
+{
+    addMidiEvent(juce::MidiMessage::allNotesOff(channel));
+}
+
+void PluginHost::pitchBend(float value, int channel)
+{
+    int wheelValue = (int)((value + 1.0f) * 8191.5f);
+    wheelValue = std::max(0, std::min(16383, wheelValue));
+    addMidiEvent(juce::MidiMessage::pitchWheel(channel, wheelValue));
+}
+
+void PluginHost::aftertouch(int noteNumber, float pressure, int channel)
+{
+    addMidiEvent(juce::MidiMessage::aftertouchChange(channel, (juce::uint8)noteNumber, (juce::uint8)(pressure * 127.0f)));
+}
+
+void PluginHost::aftertouchChannel(float pressure, int channel)
+{
+    addMidiEvent(juce::MidiMessage::channelPressureChange(channel, (juce::uint8)(pressure * 127.0f)));
+}
+
+void PluginHost::controlChange(int controlNumber, int value, int channel)
+{
+    addMidiEvent(juce::MidiMessage::controllerEvent(channel, controlNumber, (juce::uint8)value));
+}
+
+void PluginHost::midiMsg(int byte1, int byte2, int byte3)
+{
+    addMidiEvent(juce::MidiMessage(byte1, byte2, byte3));
+}
+
+void PluginHost::addMidiEvent(const juce::MidiMessage& msg)
+{
+    int timestamp = m_inputBuffer.getAvailableSamples();
+    timestamp = std::max(0, std::min(m_blockSize - 1, timestamp));
+    m_inputMidi.addEvent(msg, timestamp);
+}
+
+void PluginHost::addQWERTYMidiInput()
+{
+    callOnMainThread([this, context = createAsyncEventContext()]
+    {
+        if (m_qwertyWindow)
+        {
+            m_qwertyWindow->toFront(true);
+            return;
+        }
+
+        m_qwertyWindow.reset(new QWERTYMidiWindow(m_keyboardState, [this]() { m_qwertyWindow.reset(); }));
+    });
+}
+
+void PluginHost::removeQWERTYMidiInput()
+{
+    callOnMainThread([this, context = createAsyncEventContext()]
+    {
+        m_qwertyWindow.reset();
+    });
+}
+
+std::shared_ptr<PluginHost::AsyncEventContext> PluginHost::createAsyncEventContext()
+{
+    return std::make_shared<AsyncEventContext>(*this);
+}
+
+void PluginHost::callOnMainThread(std::function<void()> func)
+{
+    if (m_forceSynchronous)
+        callOnMessageThreadSync(func);
+    else
+        callOnMessageThread(func);
+}
 
 
 //-----------------------------------------------------------------------------
@@ -1235,7 +1160,7 @@ CK_DLL_MFUN(pluginhost_setParam)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT index = GET_NEXT_INT(ARGS);
     t_CKFLOAT val = GET_NEXT_FLOAT(ARGS);
-    RETURN->v_float = ph_obj->setParam(index, val);
+    RETURN->v_float = ph_obj->setParam(index, (float)val);
 }
 
 CK_DLL_MFUN(pluginhost_getParam)
@@ -1379,7 +1304,7 @@ CK_DLL_MFUN(pluginhost_setForceSynchronous)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT b = GET_NEXT_INT(ARGS);
-    ph_obj->setForceSynchronous(b);
+    ph_obj->setForceSynchronous(b != 0);
     RETURN->v_int = b;
 }
 
@@ -1413,7 +1338,7 @@ CK_DLL_MFUN(pluginhost_setBypass)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT b = GET_NEXT_INT(ARGS);
-    if( ph_obj ) ph_obj->setBypass(b);
+    if( ph_obj ) ph_obj->setBypass(b != 0);
     RETURN->v_int = b;
 }
 
@@ -1445,7 +1370,7 @@ CK_DLL_MFUN(pluginhost_setRealtime)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT b = GET_NEXT_INT(ARGS);
-    if( ph_obj ) ph_obj->setRealtime(b);
+    if( ph_obj ) ph_obj->setRealtime(b != 0);
     RETURN->v_int = b;
 }
 
@@ -1461,7 +1386,7 @@ CK_DLL_MFUN(pluginhost_getRealtime)
 CK_DLL_MFUN(pluginhost_bpm)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
-    RETURN->v_float = ph_obj->setBpm(GET_NEXT_FLOAT(ARGS));
+    RETURN->v_float = ph_obj->setBpm((float)GET_NEXT_FLOAT(ARGS));
 }
 
 CK_DLL_MFUN(pluginhost_getBpm)
@@ -1481,7 +1406,7 @@ CK_DLL_MFUN(pluginhost_timeSig)
 CK_DLL_MFUN(pluginhost_pos)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
-    RETURN->v_float = ph_obj->setPos(GET_NEXT_FLOAT(ARGS));
+    RETURN->v_float = ph_obj->setPos((float)GET_NEXT_FLOAT(ARGS));
 }
 
 CK_DLL_MFUN(pluginhost_getPos)
