@@ -16,7 +16,7 @@ FLAGS+=-I$(JUCE_MODULES_PATH) -I$(JUCE_LIB_HEADERS)
 
 LDFLAGS+=-mmacosx-version-min=10.13 -shared $(ARCHOPTS)
 LDFLAGS+=-L$(JUCE_LIB_PATH) -lJuceStaticLib
-LDFLAGS+=-framework Cocoa -framework CoreAudio -framework CoreMIDI -framework IOKit -framework Accelerate -framework WebKit -framework DiscRecording -framework Foundation -framework QuartzCore -framework AudioToolbox -framework CoreAudioKit
+LDFLAGS+=-framework Cocoa -framework CoreAudio -framework CoreMIDI -framework IOKit -framework Accelerate -framework WebKit -framework DiscRecording -framework Foundation -framework QuartzCore -framework AudioToolbox -framework CoreAudioKit -framework Security
 
 LD=clang++
 CXX=clang++
