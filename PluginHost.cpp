@@ -15,11 +15,15 @@
 #include "PlayHead.h"
 #include "QWERTYMidiWindow.h"
 
+//-----------------------------------------------------------------------------
 // constructor/destructor
+//-----------------------------------------------------------------------------
 CK_DLL_CTOR(pluginhost_ctor);
 CK_DLL_DTOR(pluginhost_dtor);
 
+//-----------------------------------------------------------------------------
 // parameter functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_setParam);
 CK_DLL_MFUN(pluginhost_getParam);
 CK_DLL_MFUN(pluginhost_getParamName);
@@ -29,13 +33,17 @@ CK_DLL_MFUN(pluginhost_numParams);
 CK_DLL_MFUN(pluginhost_numNonMidiParams);
 CK_DLL_MFUN(pluginhost_findParam);
 
+//-----------------------------------------------------------------------------
 // program functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_numPrograms);
 CK_DLL_MFUN(pluginhost_program);
 CK_DLL_MFUN(pluginhost_getProgram);
 CK_DLL_MFUN(pluginhost_programName);
 
+//-----------------------------------------------------------------------------
 // other functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_load);
 CK_DLL_MFUN(pluginhost_name);
 CK_DLL_MFUN(pluginhost_vendor);
@@ -58,7 +66,9 @@ CK_DLL_MFUN(pluginhost_numOutputs);
 CK_DLL_MFUN(pluginhost_setRealtime);
 CK_DLL_MFUN(pluginhost_getRealtime);
 
+//-----------------------------------------------------------------------------
 // playhead functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_bpm);
 CK_DLL_MFUN(pluginhost_getBpm);
 CK_DLL_MFUN(pluginhost_timeSig);
@@ -78,7 +88,9 @@ CK_DLL_MFUN(pluginhost_getLoopStart);
 CK_DLL_MFUN(pluginhost_loopEnd);
 CK_DLL_MFUN(pluginhost_getLoopEnd);
 
+//-----------------------------------------------------------------------------
 // MIDI functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_noteOn);
 CK_DLL_MFUN(pluginhost_noteOn_default);
 CK_DLL_MFUN(pluginhost_noteOff);
@@ -97,7 +109,9 @@ CK_DLL_MFUN(pluginhost_midiMsg);
 CK_DLL_MFUN(pluginhost_addQWERTYMidiInput);
 CK_DLL_MFUN(pluginhost_removeQWERTYMidiInput);
 
+//-----------------------------------------------------------------------------
 // tick function
+//-----------------------------------------------------------------------------
 CK_DLL_TICKF(pluginhost_tick);
 
 // data offset for internal class
@@ -111,6 +125,9 @@ class PluginHost
 {
 public:
 
+    //-------------------------------------------------------------------------
+    // constructor/destructor
+    //-------------------------------------------------------------------------
     PluginHost( t_CKFLOAT fs )
     :
       m_renderBuffer(maxChannels, 16),
@@ -153,6 +170,9 @@ public:
         }
     }
 
+    //-------------------------------------------------------------------------
+    // tick
+    //-------------------------------------------------------------------------
     void tick( SAMPLE * in, SAMPLE * out, int nframes )
     {
         constexpr int numChannels = maxChannels;
@@ -268,6 +288,9 @@ public:
         }
     }
 
+    //-------------------------------------------------------------------------
+    // parameter accessors
+    //-------------------------------------------------------------------------
     int getNumParams()
     {
         if (!m_plugin) return 0;
@@ -340,6 +363,9 @@ public:
         return params[index]->getCurrentValueAsText().toStdString();
     }
 
+    //-------------------------------------------------------------------------
+    // metadata
+    //-------------------------------------------------------------------------
     std::string getName() const
     {
         return m_plugin ? m_plugin->getName().toStdString() : "";
@@ -350,6 +376,9 @@ public:
         return m_plugin ? m_plugin->getPluginDescription().manufacturerName.toStdString() : "";
     }
 
+    //-------------------------------------------------------------------------
+    // load / state
+    //-------------------------------------------------------------------------
     void loadPlugin(const std::string& path)
     {
         juce::File file(path);
@@ -521,6 +550,9 @@ public:
         });
     }
 
+    //-------------------------------------------------------------------------
+    // async / sync
+    //-------------------------------------------------------------------------
     bool asyncEventRunning() const
     {
         return m_asyncEventCount > 0;
@@ -551,6 +583,9 @@ public:
         return m_forceSynchronous;
     }
 
+    //-------------------------------------------------------------------------
+    // processing config
+    //-------------------------------------------------------------------------
     void setBlockSize(int size)
     {
         if (size <= 0) return;
@@ -611,7 +646,9 @@ public:
         return m_plugin ? !m_plugin->isNonRealtime() : false;
     }
 
+    //-------------------------------------------------------------------------
     // program functions
+    //-------------------------------------------------------------------------
     int getNumPrograms()
     {
         if (!m_plugin) return 0;
@@ -642,7 +679,9 @@ public:
         return m_plugin->getProgramName(index).toStdString();
     }
 
+    //-------------------------------------------------------------------------
     // playHead accessors
+    //-------------------------------------------------------------------------
     float setBpm(float b) { m_playHead.setBpm(b); return b; }
     float getBpm() { return m_playHead.getBpm(); }
     void setTimeSig(int n, int d) { m_playHead.setTimeSignature(n, d); }
@@ -662,7 +701,9 @@ public:
     float setLoopEnd(float e) { m_playHead.setLoopEnd(e); return e; }
     float getLoopEnd() { return (float)m_playHead.getLoopEnd(); }
 
+    //-------------------------------------------------------------------------
     // MIDI functions
+    //-------------------------------------------------------------------------
     void noteOn(int noteNumber, float velocity, int channel)
     {
         addMidiEvent(juce::MidiMessage::noteOn(channel, (juce::uint8)noteNumber, velocity));
@@ -853,11 +894,20 @@ CK_DLL_QUERY( PluginHost )
     QUERY->begin_class(QUERY, "PluginHost", "UGen");
     QUERY->doc_class(QUERY, "A host for external plugins.");
 
+    //-------------------------------------------------------------------------
+    // constructor/destructor
+    //-------------------------------------------------------------------------
     QUERY->add_ctor(QUERY, pluginhost_ctor);
     QUERY->add_dtor(QUERY, pluginhost_dtor);
 
+    //-------------------------------------------------------------------------
+    // tick
+    //-------------------------------------------------------------------------
     QUERY->add_ugen_funcf(QUERY, pluginhost_tick, NULL, PluginHost::maxChannels, PluginHost::maxChannels);
 
+    //-------------------------------------------------------------------------
+    // parameter functions
+    //-------------------------------------------------------------------------
     QUERY->add_mfun(QUERY, pluginhost_setParam, "float", "param");
     QUERY->add_arg(QUERY, "int", "index");
     QUERY->add_arg(QUERY, "float", "value");
@@ -889,6 +939,9 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_arg(QUERY, "string", "name");
     QUERY->doc_func(QUERY, "Find parameter index by name.");
 
+    //-------------------------------------------------------------------------
+    // program functions
+    //-------------------------------------------------------------------------
     QUERY->add_mfun(QUERY, pluginhost_numPrograms, "int", "numPrograms");
     QUERY->doc_func(QUERY, "Get number of programs.");
 
@@ -903,6 +956,9 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_arg(QUERY, "int", "index");
     QUERY->doc_func(QUERY, "Get program name.");
     
+    //-------------------------------------------------------------------------
+    // other functions
+    //-------------------------------------------------------------------------
     QUERY->add_mfun(QUERY, pluginhost_load, "void", "load");
     QUERY->add_arg(QUERY, "string", "path");
     QUERY->doc_func(QUERY, "Load a plugin from a file path.");
@@ -973,6 +1029,9 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_getRealtime, "int", "realtime");
     QUERY->doc_func(QUERY, "Get whether the plugin operates in realtime mode.");
 
+    //-------------------------------------------------------------------------
+    // playhead functions
+    //-------------------------------------------------------------------------
     QUERY->add_mfun(QUERY, pluginhost_bpm, "float", "bpm");
     QUERY->add_arg(QUERY, "float", "bpm");
     QUERY->doc_func(QUERY, "Set BPM.");
@@ -1039,6 +1098,9 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_getLoopEnd, "float", "loopEnd");
     QUERY->doc_func(QUERY, "Get loop end position in PPQ.");
 
+    //-------------------------------------------------------------------------
+    // MIDI functions
+    //-------------------------------------------------------------------------
     QUERY->add_mfun(QUERY, pluginhost_noteOn, "void", "noteOn");
     QUERY->add_arg(QUERY, "int", "note");
     QUERY->add_arg(QUERY, "float", "velocity");
@@ -1118,6 +1180,9 @@ CK_DLL_QUERY( PluginHost )
     QUERY->add_mfun(QUERY, pluginhost_removeQWERTYMidiInput, "void", "removeQWERTYMidiInput");
     QUERY->doc_func(QUERY, "Remove the QWERTY MIDI input window.");
 
+    //-------------------------------------------------------------------------
+    // data offset
+    //-------------------------------------------------------------------------
     // reserve a variable for internal class pointer
     pluginhost_data_offset = QUERY->add_mvar(QUERY, "int", "@ph_data", false);
 
@@ -1132,6 +1197,9 @@ CK_DLL_QUERY( PluginHost )
 }
 
 
+//-----------------------------------------------------------------------------
+// constructor/destructor
+//-----------------------------------------------------------------------------
 CK_DLL_CTOR(pluginhost_ctor)
 {
     OBJ_MEMBER_INT(SELF, pluginhost_data_offset) = 0;
@@ -1149,6 +1217,9 @@ CK_DLL_DTOR(pluginhost_dtor)
     }
 }
 
+//-----------------------------------------------------------------------------
+// tick function
+//-----------------------------------------------------------------------------
 CK_DLL_TICKF(pluginhost_tick)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
@@ -1156,6 +1227,9 @@ CK_DLL_TICKF(pluginhost_tick)
     return TRUE;
 }
 
+//-----------------------------------------------------------------------------
+// parameter functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_setParam)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
@@ -1211,6 +1285,9 @@ CK_DLL_MFUN(pluginhost_findParam)
     RETURN->v_int = ph_obj->findParam(name);
 }
 
+//-----------------------------------------------------------------------------
+// program functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_numPrograms)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
@@ -1238,6 +1315,9 @@ CK_DLL_MFUN(pluginhost_programName)
     RETURN->v_string = (Chuck_String *)API->object->create_string(VM, ph_obj->getProgramName(index).c_str(), false);
 }
 
+//-----------------------------------------------------------------------------
+// other functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_load)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
@@ -1361,6 +1441,23 @@ CK_DLL_MFUN(pluginhost_numOutputs)
     RETURN->v_int = ph_obj ? ph_obj->getNumOutputs() : 0;
 }
 
+CK_DLL_MFUN(pluginhost_setRealtime)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    t_CKINT b = GET_NEXT_INT(ARGS);
+    if( ph_obj ) ph_obj->setRealtime(b);
+    RETURN->v_int = b;
+}
+
+CK_DLL_MFUN(pluginhost_getRealtime)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    RETURN->v_int = ph_obj ? ph_obj->isRealtime() : 1;
+}
+
+//-----------------------------------------------------------------------------
+// playhead functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_bpm)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
@@ -1473,6 +1570,9 @@ CK_DLL_MFUN(pluginhost_getLoopEnd)
     RETURN->v_float = ph_obj->getLoopEnd();
 }
 
+//-----------------------------------------------------------------------------
+// MIDI functions
+//-----------------------------------------------------------------------------
 CK_DLL_MFUN(pluginhost_noteOn)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
@@ -1589,20 +1689,6 @@ CK_DLL_MFUN(pluginhost_aftertouchChannel_default)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKFLOAT pressure = GET_NEXT_FLOAT(ARGS);
     if( ph_obj ) ph_obj->aftertouchChannel((float)pressure, 0);
-}
-
-CK_DLL_MFUN(pluginhost_setRealtime)
-{
-    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
-    t_CKINT b = GET_NEXT_INT(ARGS);
-    if( ph_obj ) ph_obj->setRealtime(b);
-    RETURN->v_int = b;
-}
-
-CK_DLL_MFUN(pluginhost_getRealtime)
-{
-    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
-    RETURN->v_int = ph_obj ? ph_obj->isRealtime() : 1;
 }
 
 CK_DLL_MFUN(pluginhost_addQWERTYMidiInput)
