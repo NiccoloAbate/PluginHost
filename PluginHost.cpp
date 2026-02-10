@@ -791,6 +791,13 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
     {
         // initialize JUCE Message Manager
         juce::MessageManager::getInstance();
+
+#if JUCE_MAC
+        // Ensure the app is transformed to a foreground process (ChucK is a CLI app by default).
+        // Not strictly necessary, but nice to have menu menu bar and dock icon, etc. - like ChuGl.
+        juce::Process::setDockIconVisible(true);
+#endif
+
         juceInitialized = true;
     }
 
