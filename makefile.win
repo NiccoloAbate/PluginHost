@@ -2,17 +2,16 @@ MSBUILD=msbuild.exe
 
 ifneq (,$(CHUCK_DEBUG))
 CONFIG=Debug
-CHUG_BIN=Debug/PowerADSR.chug
+CHUG_BIN=x64/Debug/PluginHost.chug
 else
 CONFIG=Release
-CHUG_BIN=Release/PowerADSR.chug
+CHUG_BIN=x64/Release/PluginHost.chug
 endif
 
 default: $(CHUG_BIN)
 
 $(CHUG_BIN): 
-	$(MSBUILD) /p:Configuration=$(CONFIG) 
+	$(MSBUILD) /p:Configuration=$(CONFIG) /p:Platform=x64 PluginHost.vcxproj
 
 clean:
-	$(MSBUILD) /p:Configuration=$(CONFIG) /t:Clean
-
+	$(MSBUILD) /p:Configuration=$(CONFIG) /p:Platform=x64 /t:Clean PluginHost.vcxproj

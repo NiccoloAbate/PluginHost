@@ -8,3 +8,23 @@ JuceStaticLib/
 
 **.o
 **.chug
+
+# Windows build artifacts
+x64/
+*.exp
+*.lib
+*.obj
+*.pdb
+*.tlog
+*.lastbuildstate
+*.idb
+*.recipe
+*.iobj
+*.ipdb
+*.log
+
+# Test artifacts
+pluginState
+test_plugin_state
+tests/pluginState
+tests/test_plugin_state
