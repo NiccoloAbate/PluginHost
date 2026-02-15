@@ -11,6 +11,7 @@ set(CHUGIN_NAME PluginHost)
 # Sources
 set(SOURCES
     PluginHost.cpp
+    PluginEditorWindow.cpp
     PluginHost.h
     CircularBuffer.h
     PlayHead.h
@@ -48,6 +49,7 @@ target_compile_definitions(${CHUGIN_NAME} PRIVATE
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_PLUGINHOST_VST=1
     JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_AU=1
 )
 
 if(MSVC)
@@ -116,6 +118,7 @@ elseif(APPLE)
         "-framework QuartzCore"
         "-framework AudioToolbox"
         "-framework CoreAudioKit"
+        "-framework Security"
     )
     
     # Static lib path for Mac
