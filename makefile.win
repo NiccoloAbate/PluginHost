@@ -8,10 +8,14 @@ CONFIG=Release
 CHUG_BIN=x64/Release/PluginHost.chug
 endif
 
-default: $(CHUG_BIN)
+default: build copy
 
-$(CHUG_BIN): 
+build: 
 	$(MSBUILD) /p:Configuration=$(CONFIG) /p:Platform=x64 PluginHost.vcxproj
+
+copy:
+	copy /Y $(subst /,\,$(CHUG_BIN)) .
 
 clean:
 	$(MSBUILD) /p:Configuration=$(CONFIG) /p:Platform=x64 /t:Clean PluginHost.vcxproj
+	-del /Q PluginHost.chug 2>NUL
