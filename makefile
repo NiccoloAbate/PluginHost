@@ -4,7 +4,7 @@ CHUGIN_NAME=PluginHost
 
 # all of the c/cpp files that compose this chugin
 C_MODULES=
-CXX_MODULES=PluginHost.cpp
+CXX_MODULES=PluginHost.cpp PluginEditorWindow.cpp
 
 # where to find chugin.h
 CK_SRC_PATH?=../chuck/include/

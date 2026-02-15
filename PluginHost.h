@@ -127,6 +127,7 @@ public:
     void addMidiEvent(const juce::MidiMessage& msg);
     void addQWERTYMidiInput();
     void removeQWERTYMidiInput();
+    void toggleQWERTYMidiInput();
 
     // for now used fixed number of channels
     static constexpr int maxChannels = 8;

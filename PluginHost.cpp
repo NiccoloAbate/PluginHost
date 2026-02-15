@@ -103,6 +103,7 @@ CK_DLL_MFUN(pluginhost_controlChange_default);
 CK_DLL_MFUN(pluginhost_midiMsg);
 CK_DLL_MFUN(pluginhost_addQWERTYMidiInput);
 CK_DLL_MFUN(pluginhost_removeQWERTYMidiInput);
+CK_DLL_MFUN(pluginhost_toggleQWERTYMidiInput);
 
 //-----------------------------------------------------------------------------
 // tick function
@@ -479,7 +480,7 @@ void PluginHost::showEditor()
         if (auto* editor = m_plugin->createEditorIfNeeded())
         {
             // wrap the editor in a window
-            auto* window = new PluginEditorWindow(editor);
+            auto* window = new PluginEditorWindow(*this, editor);
             window->addToDesktop();
             window->toFront(true);
             window->onClose = [this]() { m_editor.reset(); };
@@ -767,6 +768,14 @@ void PluginHost::removeQWERTYMidiInput()
     });
 }
 
+void PluginHost::toggleQWERTYMidiInput()
+{
+    if (m_qwertyWindow)
+        removeQWERTYMidiInput();
+    else
+        addQWERTYMidiInput();
+}
+
 std::shared_ptr<PluginHost::AsyncEventContext> PluginHost::createAsyncEventContext()
 {
     return std::make_shared<AsyncEventContext>(*this);
@@ -791,12 +800,24 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
     {
         // initialize JUCE Message Manager
         juce::MessageManager::getInstance();
+
+#if JUCE_MAC
+        // Ensure the app is transformed to a foreground process (ChucK is a CLI app by default).
+        // Not strictly necessary, but nice to have menu menu bar and dock icon, etc. - like ChuGl.
+        juce::Process::setDockIconVisible(true);
+#endif
+
         juceInitialized = true;
     }
 
+#if JUCE_MODAL_LOOPS_PERMITTED
     // pump the message loop briefly to process events
     constexpr int ms = 1; // should really be 0, but it doesn't seem to work if it's 0...
     juce::MessageManager::getInstance()->runDispatchLoopUntil(1); 
+#else
+    std::static_assert<false>; // this doesn't work
+    juce::MessageManager::getInstance()->runDispatchLoop();
+#endif
 
     return TRUE;
 }
@@ -1104,6 +1125,9 @@ CK_DLL_QUERY( PluginHost )
 
     QUERY->add_mfun(QUERY, pluginhost_removeQWERTYMidiInput, "void", "removeQWERTYMidiInput");
     QUERY->doc_func(QUERY, "Remove the QWERTY MIDI input window.");
+
+    QUERY->add_mfun(QUERY, pluginhost_toggleQWERTYMidiInput, "void", "toggleQWERTYMidiInput");
+    QUERY->doc_func(QUERY, "Toggle the QWERTY MIDI input window.");
 
     //-------------------------------------------------------------------------
     // data offset
@@ -1626,4 +1650,10 @@ CK_DLL_MFUN(pluginhost_removeQWERTYMidiInput)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     if( ph_obj ) ph_obj->removeQWERTYMidiInput();
+}
+
+CK_DLL_MFUN(pluginhost_toggleQWERTYMidiInput)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    if( ph_obj ) ph_obj->toggleQWERTYMidiInput();
 }
