@@ -3,28 +3,18 @@
 .vscode/
 imgui.ini
 
+# JUCE artifacts
 Juce/
 JuceStaticLib/
 
-**.o
-**.chug
-
-# Windows build artifacts
-x64/
+# Build artifacts
+build/
+*.o
+*.obj
 *.exp
 *.lib
-*.obj
 *.pdb
-*.tlog
-*.lastbuildstate
-*.idb
-*.recipe
-*.iobj
-*.ipdb
-*.log
+*.chug
 
 # Test artifacts
-pluginState
-test_plugin_state
-tests/pluginState
-tests/test_plugin_state
+tests/**.bin

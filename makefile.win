@@ -1,21 +1,17 @@
-MSBUILD=msbuild.exe
+CMAKE=cmake
 
 ifneq (,$(CHUCK_DEBUG))
 CONFIG=Debug
-CHUG_BIN=x64/Debug/PluginHost.chug
 else
 CONFIG=Release
-CHUG_BIN=x64/Release/PluginHost.chug
 endif
 
-default: build copy
+default: build
 
-build: 
-	$(MSBUILD) /p:Configuration=$(CONFIG) /p:Platform=x64 PluginHost.vcxproj
-
-copy:
-	copy /Y $(subst /,\,$(CHUG_BIN)) .
+build:
+	$(CMAKE) -B build -G "Visual Studio 17 2022" -A x64
+	$(CMAKE) --build build --config $(CONFIG)
 
 clean:
-	$(MSBUILD) /p:Configuration=$(CONFIG) /p:Platform=x64 /t:Clean PluginHost.vcxproj
+	-rmdir /S /Q build 2>NUL
 	-del /Q PluginHost.chug 2>NUL

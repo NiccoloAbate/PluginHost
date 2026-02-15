@@ -10,7 +10,8 @@ plugin.blockSize(64);
 //plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
 //plugin.load("/Library/Audio/Plug-Ins/VST3/Graphiti.vst3");
 //plugin.load("/Library/Audio/Plug-Ins/Components/Guitar Rig 7.component");
-plugin.load("C:/Program Files/Common Files/VST3/Graphiti.vst3");
+//plugin.load("C:/Program Files/Common Files/VST3/Graphiti.vst3");
+plugin.load("C:/Program Files/Common Files/VST3/Pianoteq 9.vst3");
 
 // show the editor
 plugin.showEditor();
@@ -25,9 +26,9 @@ plugin.addQWERTYMidiInput();
 // plugin.asyncEvent() => now; (not quite fully thread safe...)
 
 // save state
-plugin.saveState("pluginState");
+plugin.saveState("tests/pluginState.bin");
 // load state
-plugin.loadState("pluginState");
+plugin.loadState("tests/pluginState.bin");
 
 // print parameters
 <<< plugin.numParams(), "params:" >>>;
