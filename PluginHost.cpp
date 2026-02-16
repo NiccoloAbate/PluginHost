@@ -49,6 +49,7 @@ CK_DLL_MFUN(pluginhost_showEditor);
 CK_DLL_MFUN(pluginhost_hideEditor);
 CK_DLL_MFUN(pluginhost_asyncEventRunning);
 CK_DLL_MFUN(pluginhost_waitForAsyncEvents);
+CK_DLL_MFUN(pluginhost_getAsyncEvent);
 CK_DLL_MFUN(pluginhost_setForceSynchronous);
 CK_DLL_MFUN(pluginhost_getForceSynchronous);
 CK_DLL_MFUN(pluginhost_setBlockSize);
@@ -114,6 +115,8 @@ CK_DLL_TICKF(pluginhost_tick);
 // data offset for internal class
 t_CKINT pluginhost_data_offset = 0;
 
+// shared event buffer for all PluginHost instances
+static CBufferSimple * g_eventBuffer = nullptr;
 
 //-----------------------------------------------------------------------------
 // PluginHost Implementation
@@ -122,12 +125,16 @@ t_CKINT pluginhost_data_offset = 0;
 //-------------------------------------------------------------------------
 // constructor/destructor
 //-------------------------------------------------------------------------
-PluginHost::PluginHost( t_CKFLOAT fs )
+PluginHost::PluginHost( t_CKFLOAT fs, Chuck_VM * vm, CK_DL_API api )
 :
+  m_vm(vm), m_api(api),
   m_renderBuffer(maxChannels, 16),
   m_inputBuffer(maxChannels, maxBufferSize + 1),
   m_outputBuffer(maxChannels, maxBufferSize + 1)
 {
+    jassert(vm);
+    jassert(api);
+
     m_srate = fs;
     // default block size
     m_blockSize = 16;
@@ -137,6 +144,20 @@ PluginHost::PluginHost( t_CKFLOAT fs )
     
     // register plugin formats
     m_formatManager.addDefaultFormats();
+
+    // initialize shared global event buffer if needed
+    if (g_eventBuffer == nullptr)
+        g_eventBuffer = api->vm->create_event_buffer(vm);
+
+    // create instance-level event object
+    Chuck_DL_Api::Type eventType = api->type->lookup(vm, "PluginHostAsyncEvent");
+    if (eventType == nullptr)
+        eventType = api->type->lookup(vm, "Event");
+
+    if (eventType != nullptr)
+        m_asyncEvent = (Chuck_Event *) api->object->create_without_shred(vm, eventType, true);
+    else
+        m_asyncEvent = nullptr;
 }
 
 PluginHost::~PluginHost()
@@ -154,6 +175,13 @@ PluginHost::~PluginHost()
         // destroy the plugin on the main thread
         std::shared_ptr<juce::AudioPluginInstance> plugin = std::move(m_plugin);
         juce::MessageManager::callAsync([plugin]() {});
+    }
+
+    // release event object
+    if (m_asyncEvent)
+    {
+        m_api->object->release((Chuck_Object*)m_asyncEvent);
+        m_asyncEvent = nullptr;
     }
 
     // destroy qwerty window if it exists
@@ -642,6 +670,20 @@ bool PluginHost::isRealtime() const
     return m_plugin ? !m_plugin->isNonRealtime() : false;
 }
 
+Chuck_Event* PluginHost::getAsyncEvent() { return m_asyncEvent; }
+
+void PluginHost::broadcastAsyncEvent()
+{
+    if (m_asyncEvent && g_eventBuffer)
+    {
+        // check if there are any outstanding async events
+        if (m_asyncEventCount.load() != 0)
+            return;
+        
+        m_api->vm->queue_event(m_vm, m_asyncEvent, 1, g_eventBuffer);
+    }
+}
+
 //-------------------------------------------------------------------------
 // program functions
 //-------------------------------------------------------------------------
@@ -860,6 +902,10 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_quit( void * bindle )
 CK_DLL_QUERY( PluginHost )
 {
     QUERY->setname(QUERY, "PluginHost");
+
+    QUERY->begin_class(QUERY, "PluginHostAsyncEvent", "Event");
+    QUERY->doc_class(QUERY, "Async event for PluginHost notifications.");
+    QUERY->end_class(QUERY);
 
     QUERY->begin_class(QUERY, "PluginHost", "UGen");
     QUERY->doc_class(QUERY, "A host for external plugins.");
@@ -1176,7 +1222,7 @@ CK_DLL_QUERY( PluginHost )
 CK_DLL_CTOR(pluginhost_ctor)
 {
     OBJ_MEMBER_INT(SELF, pluginhost_data_offset) = 0;
-    PluginHost * ph_obj = new PluginHost(API->vm->srate(VM));
+    PluginHost * ph_obj = new PluginHost(API->vm->srate(VM), VM, API);
     OBJ_MEMBER_INT(SELF, pluginhost_data_offset) = (t_CKINT) ph_obj;
 }
 
@@ -1680,4 +1726,11 @@ CK_DLL_MFUN(pluginhost_toggleQWERTYMidiInput)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     if( ph_obj ) ph_obj->toggleQWERTYMidiInput();
+}
+
+CK_DLL_MFUN(pluginhost_getAsyncEvent)
+{
+    PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
+    Chuck_Event * ev = ph_obj->getAsyncEvent();
+    RETURN->v_object = (Chuck_Object *) ev;
 }
