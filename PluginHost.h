@@ -26,7 +26,7 @@ public:
     //-------------------------------------------------------------------------
     // constructor/destructor
     //-------------------------------------------------------------------------
-    PluginHost( t_CKFLOAT fs, Chuck_VM * vm, CK_DL_API api );
+    PluginHost( t_CKFLOAT fs );
     ~PluginHost();
 
     //-------------------------------------------------------------------------
@@ -82,8 +82,6 @@ public:
     int getNumOutputs() const;
     void setRealtime(bool b);
     bool isRealtime() const;
-
-    Chuck_Event* getAsyncEvent();
 
     //-------------------------------------------------------------------------
     // program functions
@@ -175,24 +173,11 @@ private:
     // output buffer
     CircularBuffer m_outputBuffer;
 
-    Chuck_VM* m_vm;
-    CK_DL_API m_api;
-    Chuck_Event* m_asyncEvent;
-
-    void broadcastAsyncEvent();
-
     // context for tracking async events
     struct AsyncEventContext
     {
         AsyncEventContext(PluginHost& host) : m_host(&host) { m_host->m_asyncEventCount.fetch_add(1); }
-        ~AsyncEventContext() 
-        { 
-            if (m_host) 
-            {
-                if (m_host->m_asyncEventCount.fetch_sub(1) == 1)
-                    m_host->broadcastAsyncEvent();
-            }
-        }
+        ~AsyncEventContext() { if (m_host) m_host->m_asyncEventCount.fetch_sub(1); }
 
         AsyncEventContext(const AsyncEventContext&) = delete;
         AsyncEventContext& operator=(const AsyncEventContext&) = delete;
