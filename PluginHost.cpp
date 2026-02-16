@@ -471,8 +471,8 @@ void PluginHost::showEditor()
             return;
         }
         
-        // make sure that the plugin has an editor
-        if (!m_plugin->hasEditor())
+        // make sure that there is a plugin and that the plugin has an editor
+        if (!m_plugin || !m_plugin->hasEditor())
             return;
         
         // create the editor
