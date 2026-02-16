@@ -5,8 +5,15 @@
 imgui.ini
 
 # JUCE artifacts
-Juce/
+Juce/*
+!Juce/8.0.4/
+#!Juce/Mac/
+#!Juce/Win/
+
 JuceStaticLib/
+#JuceStaticLib/*
+#!JuceStaticLib/Source/
+#!JuceStaticLib/JuceLibraryCode/
 
 # Build artifacts
 build/
