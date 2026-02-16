@@ -1,18 +1,17 @@
-MSBUILD=msbuild.exe
+CMAKE=cmake
 
 ifneq (,$(CHUCK_DEBUG))
 CONFIG=Debug
-CHUG_BIN=Debug/PowerADSR.chug
 else
 CONFIG=Release
-CHUG_BIN=Release/PowerADSR.chug
 endif
 
-default: $(CHUG_BIN)
+default: build
 
-$(CHUG_BIN): 
-	$(MSBUILD) /p:Configuration=$(CONFIG) 
+build:
+	$(CMAKE) -B build -G "Visual Studio 17 2022" -A x64
+	$(CMAKE) --build build --config $(CONFIG)
 
 clean:
-	$(MSBUILD) /p:Configuration=$(CONFIG) /t:Clean
-
+	-rmdir /S /Q build 2>NUL
+	-del /Q PluginHost.chug 2>NUL

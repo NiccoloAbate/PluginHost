@@ -3,8 +3,18 @@
 .vscode/
 imgui.ini
 
+# JUCE artifacts
 Juce/
 JuceStaticLib/
 
-**.o
-**.chug
+# Build artifacts
+build/
+*.o
+*.obj
+*.exp
+*.lib
+*.pdb
+*.chug
+
+# Test artifacts
+tests/**.bin

@@ -115,5 +115,11 @@ install: $(CHUG)
 	chmod 755 $(CHUGIN_PATH)/$(CHUG)
 
 clean: 
+ifeq ($(OS),Windows_NT)
+	-del /Q $(C_OBJECTS) $(CXX_OBJECTS) $(CHUG) $(WEBCHUG) 2>NUL
+	-rmdir /S /Q Release Debug x64 2>NUL
+	make -f makefile.win clean
+else
 	rm -rf $(C_OBJECTS) $(CXX_OBJECTS) $(CHUG) $(WEBCHUG) Release Debug
+endif
 
