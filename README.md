@@ -13,14 +13,6 @@
 - **QWERTY MIDI**: Optional QWERTY keyboard window for playing plugins with your computer keyboard.
 - **Synchronous/Asynchronous Modes**: Choose between simplified synchronous operations or non-blocking asynchronous events.
 
-## Building
-
-### Requirements
-
-- [ChucK](https://chuck.cs.princeton.edu/) source code (for `chugin.h`).
-- [CMake](https://cmake.org/) (recommended) or `make`.
-- [JUCE](https://juce.com/) (included as a static library in the repository).
-
 ## Quick Start
 
 ```chuck
@@ -117,22 +109,40 @@ Check the `tests/` directory for comprehensive examples:
 - `transport_sync.ck`: Synchronizing LFOs and sequencers via the playhead.
 - `plugin_chain.ck`: Chaining multiple `PluginHost` instances.
 
+## Building
+
+### Requirements
+
+- [ChucK](https://chuck.cs.princeton.edu/) source code (for `chugin.h`).
+- [JUCE 8.0.4](https://juce.com/) (included as a git submodule).
+- [Projucer](https://juce.com/get-juce/download) (to generate the static library project).
+- [CMake](https://cmake.org/) or `make`.
+
 ### Build Instructions
 
-1.  Ensure the `CK_SRC_PATH` in `CMakeLists.txt` or `makefile` points to your ChucK `include` directory.
-2.  Use the provided `makefile`:
+The Chugin links against a static library of JUCE to keep the build process efficient.
+
+1.  **Initialize Submodules**:
     ```bash
-    make mac    # macOS
-    make win32  # Windows
-    make linux  # Linux
+    git submodule update --init --recursive
     ```
-    Alternatively, using CMake directly:
-    ```bash
-    mkdir build && cd build
-    cmake ..
-    cmake --build .
-    ```
-3.  The resulting `PluginHost.chug` file will be created in the project root.
+2.  **Build the JUCE Static Library**:
+    - Open `JuceStaticLib/JuceStaticLib.jucer` in the **Projucer**.
+    - Ensure the module paths are correct for your system.
+    - Click **"Save and Open in IDE"** (Xcode, Visual Studio, etc.).
+    - Build the **Release** configuration.
+    - Ensure the resulting static library is placed in (or copied to) `Juce/Mac/Release/` (or the equivalent for your OS).
+3.  **Build the Chugin**:
+    - Ensure `CK_SRC_PATH` in the root `makefile` or `CMakeLists.txt` points to your ChucK `include` directory.
+    - Use the root `makefile`:
+      ```bash
+      make mac    # macOS
+      make win32  # Windows
+      make linux  # Linux
+      ```
+    - The resulting `PluginHost.chug` will be created in the project root.
+
+> **Note**: Full CMake support (compiling JUCE modules directly without Projucer) is on the roadmap for a future update.
 
 ## License
 
