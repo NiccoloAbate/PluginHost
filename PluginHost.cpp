@@ -9,6 +9,7 @@
 #include <limits.h>
 #include <math.h>
 #include <iostream>
+#include <algorithm>
 
 //-----------------------------------------------------------------------------
 // constructor/destructor
@@ -701,38 +702,45 @@ float PluginHost::getLoopEnd() { return (float)m_playHead.getLoopEnd(); }
 //-------------------------------------------------------------------------
 void PluginHost::noteOn(int noteNumber, float velocity, int channel)
 {
+    channel = std::clamp(channel, 1, 16);
     addMidiEvent(juce::MidiMessage::noteOn(channel, (juce::uint8)noteNumber, velocity));
 }
 
 void PluginHost::noteOff(int noteNumber, int channel)
 {
+    channel = std::clamp(channel, 1, 16);
     addMidiEvent(juce::MidiMessage::noteOff(channel, (juce::uint8)noteNumber, (juce::uint8)0));
 }
 
 void PluginHost::allNotesOff(int channel)
 {
+    channel = std::clamp(channel, 1, 16);
     addMidiEvent(juce::MidiMessage::allNotesOff(channel));
 }
 
 void PluginHost::pitchBend(float value, int channel)
 {
+    channel = std::clamp(channel, 1, 16);
     int wheelValue = (int)((value + 1.0f) * 8191.5f);
-    wheelValue = std::max(0, std::min(16383, wheelValue));
+    wheelValue = std::clamp(wheelValue, 0, 16383);
     addMidiEvent(juce::MidiMessage::pitchWheel(channel, wheelValue));
 }
 
 void PluginHost::aftertouch(int noteNumber, float pressure, int channel)
 {
+    channel = std::clamp(channel, 1, 16);
     addMidiEvent(juce::MidiMessage::aftertouchChange(channel, (juce::uint8)noteNumber, (juce::uint8)(pressure * 127.0f)));
 }
 
 void PluginHost::aftertouchChannel(float pressure, int channel)
 {
+    channel = std::clamp(channel, 1, 16);
     addMidiEvent(juce::MidiMessage::channelPressureChange(channel, (juce::uint8)(pressure * 127.0f)));
 }
 
 void PluginHost::controlChange(int controlNumber, int value, int channel)
 {
+    channel = std::clamp(channel, 1, 16);
     addMidiEvent(juce::MidiMessage::controllerEvent(channel, controlNumber, (juce::uint8)value));
 }
 
@@ -792,7 +800,6 @@ void PluginHost::ensureForegroundProcess()
     {
         // Ensure the app is transformed to a foreground process (ChucK is a CLI app by default).
         // Not strictly necessary, but nice to have menu menu bar and dock icon, etc. - like ChuGl.
-        juce::Process::setDockIconVisible(true);
         isDockIconVisible = true;
     }
 #endif
@@ -1553,7 +1560,7 @@ CK_DLL_MFUN(pluginhost_noteOn_default)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT note = GET_NEXT_INT(ARGS);
     t_CKFLOAT vel = GET_NEXT_FLOAT(ARGS);
-    if( ph_obj ) ph_obj->noteOn(note, (float)vel, 0);
+    if( ph_obj ) ph_obj->noteOn(note, (float)vel, 1);
 }
 
 CK_DLL_MFUN(pluginhost_noteOff)
@@ -1568,7 +1575,7 @@ CK_DLL_MFUN(pluginhost_noteOff_default)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT note = GET_NEXT_INT(ARGS);
-    if( ph_obj ) ph_obj->noteOff(note, 0);
+    if( ph_obj ) ph_obj->noteOff(note, 1);
 }
 
 CK_DLL_MFUN(pluginhost_allNotesOff)
@@ -1581,7 +1588,7 @@ CK_DLL_MFUN(pluginhost_allNotesOff)
 CK_DLL_MFUN(pluginhost_allNotesOff_default)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
-    if( ph_obj ) ph_obj->allNotesOff(0);
+    if( ph_obj ) ph_obj->allNotesOff(1);
 }
 
 CK_DLL_MFUN(pluginhost_controlChange)
@@ -1598,7 +1605,7 @@ CK_DLL_MFUN(pluginhost_controlChange_default)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT ctrl = GET_NEXT_INT(ARGS);
     t_CKINT val = GET_NEXT_INT(ARGS);
-    if( ph_obj ) ph_obj->controlChange(ctrl, val, 0);
+    if( ph_obj ) ph_obj->controlChange(ctrl, val, 1);
 }
 
 CK_DLL_MFUN(pluginhost_midiMsg)
@@ -1622,7 +1629,7 @@ CK_DLL_MFUN(pluginhost_pitchBend_default)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKFLOAT val = GET_NEXT_FLOAT(ARGS);
-    if( ph_obj ) ph_obj->pitchBend((float)val, 0);
+    if( ph_obj ) ph_obj->pitchBend((float)val, 1);
 }
 
 CK_DLL_MFUN(pluginhost_aftertouch)
@@ -1639,7 +1646,7 @@ CK_DLL_MFUN(pluginhost_aftertouch_default)
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKINT note = GET_NEXT_INT(ARGS);
     t_CKFLOAT pressure = GET_NEXT_FLOAT(ARGS);
-    if( ph_obj ) ph_obj->aftertouch(note, (float)pressure, 0);
+    if( ph_obj ) ph_obj->aftertouch(note, (float)pressure, 1);
 }
 
 CK_DLL_MFUN(pluginhost_aftertouchChannel)
@@ -1654,7 +1661,7 @@ CK_DLL_MFUN(pluginhost_aftertouchChannel_default)
 {
     PluginHost * ph_obj = (PluginHost *) OBJ_MEMBER_INT(SELF, pluginhost_data_offset);
     t_CKFLOAT pressure = GET_NEXT_FLOAT(ARGS);
-    if( ph_obj ) ph_obj->aftertouchChannel((float)pressure, 0);
+    if( ph_obj ) ph_obj->aftertouchChannel((float)pressure, 1);
 }
 
 CK_DLL_MFUN(pluginhost_addQWERTYMidiInput)
