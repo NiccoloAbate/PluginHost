@@ -55,6 +55,8 @@ target_compile_definitions(${CHUGIN_NAME} PRIVATE
     JUCE_PLUGINHOST_VST=1
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_AU=1
+    $<$<CONFIG:Debug>:DEBUG=1>
+    $<$<CONFIG:Release>:NDEBUG=1>
 )
 
 if(MSVC)
@@ -68,9 +70,7 @@ if(MSVC)
     )
 
     # Linker settings for Windows
-    set(JUCE_LIB_PATH "Juce/Win/Release/Static Library")
-    
-    target_link_directories(${CHUGIN_NAME} PRIVATE "${JUCE_LIB_PATH}")
+    target_link_directories(${CHUGIN_NAME} PRIVATE "Juce/Win/$<CONFIG>/Static Library")
     
     target_link_libraries(${CHUGIN_NAME} PRIVATE
         JuceStaticLib.lib
@@ -120,7 +120,7 @@ elseif(APPLE)
     )
     
     # Static lib path for Mac
-    target_link_directories(${CHUGIN_NAME} PRIVATE "Juce/Mac/Release")
+    target_link_directories(${CHUGIN_NAME} PRIVATE "Juce/Mac/$<CONFIG>")
     target_link_libraries(${CHUGIN_NAME} PRIVATE JuceStaticLib)
 
 elseif(UNIX AND NOT APPLE)
@@ -141,10 +141,8 @@ elseif(UNIX AND NOT APPLE)
     )
     
     # Static lib path for Linux (if exists)
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Juce/Linux/Release")
-        target_link_directories(${CHUGIN_NAME} PRIVATE "Juce/Linux/Release")
-        target_link_libraries(${CHUGIN_NAME} PRIVATE JuceStaticLib)
-    endif()
+    target_link_directories(${CHUGIN_NAME} PRIVATE "Juce/Linux/$<CONFIG>")
+    target_link_libraries(${CHUGIN_NAME} PRIVATE JuceStaticLib)
 endif()
 
 # Post-build copy to root for all platforms
