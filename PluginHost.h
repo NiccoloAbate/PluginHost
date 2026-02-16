@@ -189,6 +189,9 @@ private:
     // create an async event context
     std::shared_ptr<AsyncEventContext> createAsyncEventContext();
 
+    // ensure that the process is a foreground process (Mac only)
+    void ensureForegroundProcess();
+
     // call a function on the main thread, either synchonously or asynchronously
     void callOnMainThread(std::function<void()> func);
 

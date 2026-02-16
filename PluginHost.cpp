@@ -479,6 +479,8 @@ void PluginHost::showEditor()
         // create the editor
         if (auto* editor = m_plugin->createEditorIfNeeded())
         {
+            ensureForegroundProcess();
+
             // wrap the editor in a window
             auto* window = new PluginEditorWindow(*this, editor);
             window->addToDesktop();
@@ -756,6 +758,7 @@ void PluginHost::addQWERTYMidiInput()
             return;
         }
 
+        ensureForegroundProcess();
         m_qwertyWindow.reset(new QWERTYMidiWindow(m_keyboardState, [this]() { m_qwertyWindow.reset(); }));
     });
 }
@@ -781,6 +784,20 @@ std::shared_ptr<PluginHost::AsyncEventContext> PluginHost::createAsyncEventConte
     return std::make_shared<AsyncEventContext>(*this);
 }
 
+void PluginHost::ensureForegroundProcess()
+{
+#if JUCE_MAC
+    static bool isDockIconVisible = false;
+    if (!isDockIconVisible)
+    {
+        // Ensure the app is transformed to a foreground process (ChucK is a CLI app by default).
+        // Not strictly necessary, but nice to have menu menu bar and dock icon, etc. - like ChuGl.
+        juce::Process::setDockIconVisible(true);
+        isDockIconVisible = true;
+    }
+#endif
+}
+
 void PluginHost::callOnMainThread(std::function<void()> func)
 {
     if (m_forceSynchronous)
@@ -804,7 +821,7 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
 #if JUCE_MAC
         // Ensure the app is transformed to a foreground process (ChucK is a CLI app by default).
         // Not strictly necessary, but nice to have menu menu bar and dock icon, etc. - like ChuGl.
-        juce::Process::setDockIconVisible(true);
+        // juce::Process::setDockIconVisible(true);
 #endif
 
         juceInitialized = true;
