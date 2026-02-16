@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 
+if(APPLE)
+    set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "" FORCE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "" FORCE)
+endif()
+
 project(PluginHost VERSION 1.0.0)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -11,6 +16,7 @@ set(CHUGIN_NAME PluginHost)
 # Sources
 set(SOURCES
     PluginHost.cpp
+    PluginEditorWindow.cpp
     PluginHost.h
     CircularBuffer.h
     PlayHead.h
@@ -48,6 +54,7 @@ target_compile_definitions(${CHUGIN_NAME} PRIVATE
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_PLUGINHOST_VST=1
     JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_AU=1
 )
 
 if(MSVC)
@@ -89,13 +96,6 @@ if(MSVC)
         kernel32.lib
     )
 
-    # Post-build copy to root
-    add_custom_command(TARGET ${CHUGIN_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:${CHUGIN_NAME}>"
-        "${CMAKE_CURRENT_SOURCE_DIR}/"
-    )
-
 elseif(APPLE)
     # macOS specific settings (based on makefile.mac)
     target_compile_definitions(${CHUGIN_NAME} PRIVATE
@@ -116,16 +116,40 @@ elseif(APPLE)
         "-framework QuartzCore"
         "-framework AudioToolbox"
         "-framework CoreAudioKit"
+        "-framework Security"
     )
     
     # Static lib path for Mac
     target_link_directories(${CHUGIN_NAME} PRIVATE "Juce/Mac/Release")
     target_link_libraries(${CHUGIN_NAME} PRIVATE JuceStaticLib)
 
-    # Post-build copy to root
-    add_custom_command(TARGET ${CHUGIN_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<TARGET_FILE:${CHUGIN_NAME}>"
-        "${CMAKE_CURRENT_SOURCE_DIR}/"
+elseif(UNIX AND NOT APPLE)
+    # Linux specific settings (based on makefile.linux)
+    target_compile_definitions(${CHUGIN_NAME} PRIVATE
+        __LINUX_ALSA__
+        __PLATFORM_LINUX__
+        JUCE_LINUX=1
     )
+    
+    # Linker settings for Linux
+    # Note: Depending on JUCE modules used, more libraries might be needed here
+    target_link_libraries(${CHUGIN_NAME} PRIVATE
+        pthread
+        dl
+        rt
+        stdc++
+    )
+    
+    # Static lib path for Linux (if exists)
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Juce/Linux/Release")
+        target_link_directories(${CHUGIN_NAME} PRIVATE "Juce/Linux/Release")
+        target_link_libraries(${CHUGIN_NAME} PRIVATE JuceStaticLib)
+    endif()
 endif()
+
+# Post-build copy to root for all platforms
+add_custom_command(TARGET ${CHUGIN_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "$<TARGET_FILE:${CHUGIN_NAME}>"
+    "${CMAKE_CURRENT_SOURCE_DIR}/"
+)

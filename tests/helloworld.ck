@@ -7,17 +7,17 @@ plugin.forceSynchronous(true);
 plugin.blockSize(64);
 
 // load the plugin
-//plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
+plugin.load("/Library/Audio/Plug-Ins/VST3/Pianoteq 8.vst3");
 //plugin.load("/Library/Audio/Plug-Ins/VST3/Graphiti.vst3");
 //plugin.load("/Library/Audio/Plug-Ins/Components/Guitar Rig 7.component");
 //plugin.load("C:/Program Files/Common Files/VST3/Graphiti.vst3");
-plugin.load("C:/Program Files/Common Files/VST3/Pianoteq 9.vst3");
+//plugin.load("C:/Program Files/Common Files/VST3/Pianoteq 9.vst3");
 
 // show the editor
 plugin.showEditor();
 
 // add a keyboard midi input
-plugin.addQWERTYMidiInput();
+//plugin.addQWERTYMidiInput();
 
 // wait for events (when not in synchronous mode)
 // while (plugin.asyncEventRunning())
