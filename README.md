@@ -13,6 +13,41 @@
 - **QWERTY MIDI**: Optional QWERTY keyboard window for playing plugins with your computer keyboard.
 - **Synchronous/Asynchronous Modes**: Choose between simplified synchronous operations or non-blocking asynchronous events.
 
+## Building
+
+### Requirements
+
+- [ChucK](https://chuck.cs.princeton.edu/) source code (for `chugin.h`).
+- [JUCE 8.0.4](https://juce.com/) (included as a git submodule).
+- [Projucer](https://juce.com/get-juce/download) (to generate the static library project).
+- [CMake](https://cmake.org/) or `make`.
+
+### Build Instructions
+
+The Chugin links against a static library of JUCE to keep the build process efficient.
+
+1.  **Initialize Submodules**:
+    ```bash
+    git submodule update --init --recursive
+    ```
+2.  **Build the JUCE Static Library**:
+    - Open `JuceStaticLib/JuceStaticLib.jucer` in the **Projucer**.
+    - Ensure the module paths are correct for your system.
+    - Click **"Save and Open in IDE"** (Xcode, Visual Studio, etc.).
+    - Build the **Release** configuration.
+    - Ensure the resulting static library is placed in (or copied to) `Juce/Mac/Release/` (or the equivalent for your OS).
+3.  **Build the Chugin**:
+    - Ensure `CK_SRC_PATH` in the root `makefile` or `CMakeLists.txt` points to your ChucK `include` directory.
+    - Use the root `makefile`:
+      ```bash
+      make mac    # macOS
+      make win32  # Windows
+      make linux  # Linux
+      ```
+    - The resulting `PluginHost.chug` will be created in the project root.
+
+> **Note**: Full CMake support (compiling JUCE modules directly without Projucer) is on the roadmap for a future update.
+
 ## Quick Start
 
 ```chuck
@@ -34,6 +69,19 @@ host.noteOff(60);
 0 => int paramIndex;
 0.5 => host.param; // host.param(paramIndex, value)
 ```
+
+## Synchronous vs. Asynchronous Events
+
+By default, `PluginHost` operates in **Synchronous Mode** (`forceSynchronous(true)`). 
+
+In this mode, any operation that must happen on the main thread (such as `load()`, `showEditor()`, `saveState()`, or `loadState()`) will block the audio process and the ChucK VM until the operation is complete. 
+
+### Why this matters:
+- **Simplicity**: You don't have to manage timing (which can be confusing and hard to reason about) or wait for callbacks.
+- **Audio Performance**: Blocking the audio process can lead to "dropouts" or glitches in the audio stream if the operation (like loading a heavy plugin) takes too long. In practice that may not matter if all these events happend during program initialization or other non-realtime junctures.
+- **Safety**: There is a theoretical risk of deadlocks, though this hasn't been observed in standard ChucK usage.
+
+For high-performance or real-time applications where you want to load plugins without glitching existing audio set `forceSynchronous(false)` and use `asyncEventRunning()` or `waitForAsyncEvents()` to manage the lifecycle of these operations.
 
 ## API Reference
 
@@ -88,8 +136,11 @@ host.noteOff(60);
 - `void hideEditor()`: Close the plugin's GUI window.
 - `void toggleQWERTYMidiInput()`: Toggle the computer keyboard MIDI input window.
 
-### Configuration
+### Async & Configuration
 - `void forceSynchronous(int b)`: If true (default), wait for async events (like loading) to complete before returning.
+- `int forceSynchronous()`: Check if synchronous mode is active.
+- `int asyncEventRunning()`: Returns true (1) if an asynchronous operation is currently in progress.
+- `void waitForAsyncEvents()`: Blocks the current ChucK shred until all pending async events are finished. **Warning:** This is not real-time safe.
 - `void blockSize(int size)`: Set processing block size (default 16). Larger sizes are more efficient but introduce more latency.
 - `int latency()`: Get plugin latency in samples.
 - `void bypass(int b)`: Bypass/unbypass the plugin.
@@ -100,6 +151,7 @@ host.noteOff(60);
 - **MPE (MIDI Polyphonic Expression)**: Support for expressive MIDI controllers.
 - **Easier Plugin Search**: Improved workflow for locating installed plugins.
 - **Full Linux Support**: Currently implemented but needs testing and validation.
+- **ChucK Event Support For Async Event Synchronization**: plugin.asyncEvent() => now; (Current asyncEventRunning() or waitForAsyncEvents() must be used).
 
 ## Examples
 
@@ -108,41 +160,6 @@ Check the `tests/` directory for comprehensive examples:
 - `param_modulation.ck`: Automating parameters from ChucK.
 - `transport_sync.ck`: Synchronizing LFOs and sequencers via the playhead.
 - `plugin_chain.ck`: Chaining multiple `PluginHost` instances.
-
-## Building
-
-### Requirements
-
-- [ChucK](https://chuck.cs.princeton.edu/) source code (for `chugin.h`).
-- [JUCE 8.0.4](https://juce.com/) (included as a git submodule).
-- [Projucer](https://juce.com/get-juce/download) (to generate the static library project).
-- [CMake](https://cmake.org/) or `make`.
-
-### Build Instructions
-
-The Chugin links against a static library of JUCE to keep the build process efficient.
-
-1.  **Initialize Submodules**:
-    ```bash
-    git submodule update --init --recursive
-    ```
-2.  **Build the JUCE Static Library**:
-    - Open `JuceStaticLib/JuceStaticLib.jucer` in the **Projucer**.
-    - Ensure the module paths are correct for your system.
-    - Click **"Save and Open in IDE"** (Xcode, Visual Studio, etc.).
-    - Build the **Release** configuration.
-    - Ensure the resulting static library is placed in (or copied to) `Juce/Mac/Release/` (or the equivalent for your OS).
-3.  **Build the Chugin**:
-    - Ensure `CK_SRC_PATH` in the root `makefile` or `CMakeLists.txt` points to your ChucK `include` directory.
-    - Use the root `makefile`:
-      ```bash
-      make mac    # macOS
-      make win32  # Windows
-      make linux  # Linux
-      ```
-    - The resulting `PluginHost.chug` will be created in the project root.
-
-> **Note**: Full CMake support (compiling JUCE modules directly without Projucer) is on the roadmap for a future update.
 
 ## License
 
