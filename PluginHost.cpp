@@ -830,7 +830,7 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
     if(!juceInitialized)
     {
         // initialize JUCE Message Manager
-        juce::MessageManager::getInstance();
+        juce::initialiseJuce_GUI();
 
 #if JUCE_MAC
         // Ensure the app is transformed to a foreground process (ChucK is a CLI app by default).
@@ -855,8 +855,10 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
 
 t_CKBOOL CK_DLL_CALL pluginhost_main_quit( void * bindle )
 {
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(5);
+
     // clean up JUCE Message Manager
-    juce::MessageManager::deleteInstance();
+    juce::shutdownJuce_GUI();
     return TRUE;
 }
 
