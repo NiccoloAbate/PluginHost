@@ -144,6 +144,13 @@ PluginHost::~PluginHost()
     // wait for any pending async events just in case
     waitForAsyncEvents(100);
 
+    // delete the plugin editor on the message thread
+    if (m_editor)
+    {
+        std::shared_ptr<PluginEditorWindow> editor = std::move(m_editor);
+        juce::MessageManager::callAsync([editor]() {});
+    }
+
     // delete the plugin instance on the message thread
     if (m_plugin)
     {
@@ -156,7 +163,7 @@ PluginHost::~PluginHost()
         juce::MessageManager::callAsync([plugin]() {});
     }
 
-    // destroy qwerty window if it exists
+    // destroy qwerty window
     if (m_qwertyWindow)
     {
         std::shared_ptr<QWERTYMidiWindow> window = std::move(m_qwertyWindow);
