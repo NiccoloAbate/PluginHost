@@ -29,3 +29,6 @@ build/
 
 # Test artifacts
 tests/**.bin
+
+# Distribution artifacts
+version/
