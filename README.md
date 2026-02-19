@@ -89,6 +89,8 @@ For high-performance or real-time applications where you want to load plugins wi
 - `void load(string path)`: Load a plugin from the given file path.
 - `string name()`: Get the loaded plugin's name.
 - `string vendor()`: Get the plugin's manufacturer name.
+- `int numInputs()`: Get total number of input channels.
+- `int numOutputs()`: Get total number of output channels.
 - `void reset()`: Reset the plugin's internal state.
 
 ### Parameters & Programs
@@ -110,11 +112,16 @@ For high-performance or real-time applications where you want to load plugins wi
 - `void noteOn(int note, float velocity, int channel)`: Send Note On (channel 1-16).
 - `void noteOff(int note)`: Send Note Off (channel 1).
 - `void noteOff(int note, int channel)`: Send Note Off (channel 1-16).
-- `void controlChange(int control, int value)`: Send CC.
-- `void pitchBend(float value)`: Send Pitch Bend (-1.0 to 1.0).
-- `void aftertouch(int note, float pressure)`: Polyphonic aftertouch.
-- `void aftertouchChannel(float pressure)`: Channel pressure.
-- `void allNotesOff()`: Send All Notes Off.
+- `void controlChange(int control, int value)`: Send CC (channel 1).
+- `void controlChange(int control, int value, int channel)`: Send CC (channel 1-16).
+- `void pitchBend(float value)`: Send Pitch Bend (-1.0 to 1.0) (channel 1).
+- `void pitchBend(float value, int channel)`: Send Pitch Bend (-1.0 to 1.0) (channel 1-16).
+- `void aftertouch(int note, float pressure)`: Polyphonic aftertouch (channel 1).
+- `void aftertouch(int note, float pressure, int channel)`: Polyphonic aftertouch (channel 1-16).
+- `void aftertouchChannel(float pressure)`: Channel pressure (channel 1).
+- `void aftertouchChannel(float pressure, int channel)`: Channel pressure (channel 1-16).
+- `void allNotesOff()`: Send All Notes Off (channel 1).
+- `void allNotesOff(int channel)`: Send All Notes Off (channel 1-16).
 - `void midiMsg(int b1, int b2, int b3)`: Send raw 3-byte MIDI message.
 
 ### Transport & Playhead
@@ -134,6 +141,8 @@ For high-performance or real-time applications where you want to load plugins wi
 - `void loadState(string path)`: Load plugin state from a file.
 - `void showEditor()`: Open the plugin's GUI window.
 - `void hideEditor()`: Close the plugin's GUI window.
+- `void addQWERTYMidiInput()`: Open the computer keyboard MIDI input window.
+- `void removeQWERTYMidiInput()`: Close the computer keyboard MIDI input window.
 - `void toggleQWERTYMidiInput()`: Toggle the computer keyboard MIDI input window.
 
 ### Async & Configuration
@@ -141,9 +150,10 @@ For high-performance or real-time applications where you want to load plugins wi
 - `int forceSynchronous()`: Check if synchronous mode is active.
 - `int asyncEventRunning()`: Returns true (1) if an asynchronous operation is currently in progress.
 - `void waitForAsyncEvents()`: Blocks the current ChucK shred until all pending async events are finished. **Warning:** This is not real-time safe.
-- `void blockSize(int size)`: Set processing block size (default 16). Larger sizes are more efficient but introduce more latency.
+- `void blockSize(int size)` / `int blockSize()`: Set/get processing block size (default 16). Larger sizes are more efficient but introduce more latency.
 - `int latency()`: Get plugin latency in samples.
-- `void bypass(int b)`: Bypass/unbypass the plugin.
+- `void bypass(int b)` / `int bypass()`: Set/get whether the plugin is bypassed.
+- `void realtime(int b)` / `int realtime()`: Set/get whether the plugin operates in realtime mode.
 
 ## Roadmap
 
@@ -153,6 +163,8 @@ For high-performance or real-time applications where you want to load plugins wi
 - **Full Linux Support**: Currently implemented but needs testing and validation.
 - **ChucK Event Support For Async Event Synchronization**: plugin.asyncEvent() => now; (Current asyncEventRunning() or waitForAsyncEvents() must be used).
 
+**Please reach out to me with any requests!**
+
 ## Examples
 
 Check the `tests/` directory for comprehensive examples:
@@ -160,6 +172,8 @@ Check the `tests/` directory for comprehensive examples:
 - `param_modulation.ck`: Automating parameters from ChucK.
 - `transport_sync.ck`: Synchronizing LFOs and sequencers via the playhead.
 - `plugin_chain.ck`: Chaining multiple `PluginHost` instances.
+- `midi_expressive.ck`: Expressive midi controls such as pitch bend and mod wheel.
+- `destroy.ck`: Destructive of a plugin during runtime.
 
 ## License
 
