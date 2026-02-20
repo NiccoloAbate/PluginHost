@@ -807,6 +807,7 @@ void PluginHost::ensureForegroundProcess()
     {
         // Ensure the app is transformed to a foreground process (ChucK is a CLI app by default).
         // Not strictly necessary, but nice to have menu menu bar and dock icon, etc. - like ChuGl.
+        juce::Process::setDockIconVisible(true);
         isDockIconVisible = true;
     }
 #endif
