@@ -52,22 +52,22 @@ The Chugin links against a static library of JUCE to keep the build process effi
 
 ```chuck
 // Create a PluginHost instance and connect to dac
-PluginHost host => dac;
+PluginHost plugin => dac;
 
 // Load a VST3 plugin
-host.load("/Library/Audio/Plug-Ins/VST3/YourPlugin.vst3");
+plugin.load("/Library/Audio/Plug-Ins/VST3/Plugin.vst3");
 
 // Show the plugin editor GUI
-host.showEditor();
+plugin.showEditor();
 
 // Send a MIDI note
-host.noteOn(60, 0.8);
+plugin.noteOn(60, 0.8);
 1::second => now;
-host.noteOff(60);
+plugin.noteOff(60);
 
 // Automate a parameter
 0 => int paramIndex;
-host.param(paramIndex, 0.5)
+plugin.param(paramIndex, 0.5)
 ```
 
 ## Synchronous vs. Asynchronous Events
