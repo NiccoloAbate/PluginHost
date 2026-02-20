@@ -9,7 +9,7 @@
 - **MIDI Integration**: Send MIDI Note On, Note Off, Pitch Bend, Aftertouch, and Control Change messages to plugins.
 - **GUI Support**: Show and hide the plugin's native graphical editor window.
 - **State Management**: Save and load plugin state (presets) to/from files.
-- **Transport Sync**: Synchronize plugins with ChucK's timing using a built-in playhead (BPM, time signature, position, etc.).
+- **Transport Sync**: Synchronize plugin timing with built in playhead (BPM, time signature, position, etc.).
 - **QWERTY MIDI**: Optional QWERTY keyboard window for playing plugins with your computer keyboard.
 - **Synchronous/Asynchronous Modes**: Choose between simplified synchronous operations or non-blocking asynchronous events.
 
@@ -162,6 +162,7 @@ For high-performance or real-time applications where you want to load plugins wi
 - **Easier Plugin Search**: Improved workflow for locating installed plugins.
 - **Full Linux Support**: Theoretically should work, but it needs to be built and tested.
 - **ChucK Event Support For Async Event Synchronization**: plugin.asyncEvent() => now; (Current asyncEventRunning() or waitForAsyncEvents() must be used).
+- **Global Playhead Shared By All Plugins**: Global playhead object (optionally) shared by all plugins.
 
 **Please reach out to me with any requests!**
 
