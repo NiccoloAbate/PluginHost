@@ -91,7 +91,7 @@ For high-performance or real-time applications where you want to load plugins wi
 - `string vendor()`: Get the plugin's manufacturer name.
 - `int numInputs()`: Get total number of input channels.
 - `int numOutputs()`: Get total number of output channels.
-- `void reset()`: Reset the plugin's internal state.
+[//] # - `void reset()`: Reset the plugin's internal state.
 
 ### Parameters & Programs
 - `int numParams()`: Total number of parameters.
@@ -160,7 +160,7 @@ For high-performance or real-time applications where you want to load plugins wi
 - **MIDI Output**: Support for plugins that generate MIDI.
 - **MPE (MIDI Polyphonic Expression)**: Support for expressive MIDI controllers.
 - **Easier Plugin Search**: Improved workflow for locating installed plugins.
-- **Full Linux Support**: Currently implemented but needs testing and validation.
+- **Full Linux Support**: Theoretically should work, but it needs to be built and tested.
 - **ChucK Event Support For Async Event Synchronization**: plugin.asyncEvent() => now; (Current asyncEventRunning() or waitForAsyncEvents() must be used).
 
 **Please reach out to me with any requests!**
