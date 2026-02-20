@@ -31,4 +31,4 @@ build/
 tests/**.bin
 
 # Distribution artifacts
-version/
+versions/
