@@ -845,7 +845,7 @@ t_CKBOOL CK_DLL_CALL pluginhost_main_hook( void * bindle )
 #if JUCE_MODAL_LOOPS_PERMITTED
     // pump the message loop briefly to process events
     constexpr int ms = 1; // should really be 0, but it doesn't seem to work if it's 0...
-    juce::MessageManager::getInstance()->runDispatchLoopUntil(1); 
+    juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
 #else
     std::static_assert<false>; // this doesn't work
     juce::MessageManager::getInstance()->runDispatchLoop();

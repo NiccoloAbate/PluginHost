@@ -67,7 +67,7 @@ host.noteOff(60);
 
 // Automate a parameter
 0 => int paramIndex;
-0.5 => host.param; // host.param(paramIndex, value)
+host.param(paramIndex, 0.5)
 ```
 
 ## Synchronous vs. Asynchronous Events
